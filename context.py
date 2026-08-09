@@ -11,6 +11,11 @@ from typing import Any
 from urllib.request import urlopen
 import websocket
 import pyperclip
+n# Prime pyperclip’s Win32 backend outside the capture hot path.
+try:
+    pyperclip.paste()
+except Exception:
+    pass
 
 from signals import ScreenContext
 
