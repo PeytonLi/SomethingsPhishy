@@ -8,3 +8,4 @@ dist/
 build/
 .convex/
 data/corpus/*.raw
+.gstack/

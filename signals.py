@@ -86,6 +86,9 @@ class ScreenContext:
     clipboard_text: str = ""
     download_host_url: Optional[str] = None
     download_referrer_url: Optional[str] = None
+    # None means a caller supplied legacy/test data without capture metadata.
+    # A set means live capture knows exactly which fields were observable.
+    observed_fields: Optional[set[str]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +546,12 @@ def check_checkout(ctx: ScreenContext) -> list[Finding]:
     asks_for_card = re.search(
         r"\b(card number|cvv|cvc|expiry|expiration|security code)\b", text, re.I)
 
-    if claims_stripe and asks_for_card and not stripe_present and page_dom:
+    iframe_evidence_available = (
+        ctx.observed_fields is None or "iframe_origins" in ctx.observed_fields
+    )
+    stripe_hosted_page = page_dom == "stripe.com"
+    if (claims_stripe and asks_for_card and iframe_evidence_available
+            and not stripe_present and not stripe_hosted_page and page_dom):
         out.append(Finding(
             "FAKE_PAYMENT_PROCESSOR", Severity.CRITICAL,
             "This page shows Stripe branding but isn't using Stripe",
@@ -561,6 +569,10 @@ def check_checkout(ctx: ScreenContext) -> list[Finding]:
     # Brand shown on the page vs. who actually owns the checkout domain.
     if asks_for_card and page_dom:
         for brand, real in IMPERSONATED_BRANDS.items():
+            # Stripe is the processor, not necessarily the merchant receiving
+            # payment, so a merchant-hosted Stripe Elements page is expected.
+            if brand == "stripe":
+                continue
             if re.search(rf"\b{re.escape(brand)}\b", text, re.I) and page_dom != real:
                 out.append(Finding(
                     "CHECKOUT_BRAND_MISMATCH", Severity.HIGH,
@@ -672,6 +684,7 @@ def _q(s: str) -> str:
 
 def check_windows(ctx: ScreenContext) -> list[Finding]:
     out, text, clip = [], ctx.text or "", ctx.clipboard_text or ""
+    clickfix = False
     name = ctx.download_filename or ""
     ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
     def add(code, sev, title, observed):

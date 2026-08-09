@@ -19,6 +19,7 @@ export const recordScan = mutation({
     findingCodes: v.array(v.string()),
     findingsRedacted: v.array(finding),
     textHash: v.optional(v.string()),
+    screenshotId: v.optional(v.id("_storage")),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -43,14 +44,30 @@ export const recordScan = mutation({
   },
 });
 
+export const generateScreenshotUploadUrl = mutation({
+  args: {},
+  returns: v.string(),
+  handler: async (ctx) => ctx.storage.generateUploadUrl(),
+});
+
 export const recentScans = query({
   args: { userId: v.string(), limit: v.optional(v.number()) },
-  handler: async (ctx, { userId, limit }) =>
-    ctx.db
+  handler: async (ctx, { userId, limit }) => {
+    const scans = await ctx.db
       .query("scans")
       .withIndex("by_user_time", (q) => q.eq("userId", userId))
       .order("desc")
-      .take(Math.min(Math.max(limit ?? 50, 1), 100)),
+      .take(Math.min(Math.max(limit ?? 50, 1), 100));
+
+    return Promise.all(
+      scans.map(async (scan) => ({
+        ...scan,
+        screenshotUrl: scan.screenshotId
+          ? await ctx.storage.getUrl(scan.screenshotId)
+          : null,
+      })),
+    );
+  },
 });
 
 export const guardianFeed = query({
@@ -59,7 +76,7 @@ export const guardianFeed = query({
     const links = await ctx.db
       .query("guardians")
       .withIndex("by_guardian", (q) => q.eq("guardianUserId", guardianUserId))
-      .collect();
+      .take(100);
     const allowedUsers = new Set(
       links.filter((link) => link.consentGivenAt > 0).map((link) => link.protectedUserId),
     );
@@ -74,10 +91,19 @@ export const guardianFeed = query({
           .take(Math.min(Math.max(limit ?? 50, 1), 100)),
       ),
     );
-    return scans
+    const recentScans = scans
       .flat()
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, Math.min(Math.max(limit ?? 50, 1), 100));
+
+    return Promise.all(
+      recentScans.map(async (scan) => ({
+        ...scan,
+        screenshotUrl: scan.screenshotId
+          ? await ctx.storage.getUrl(scan.screenshotId)
+          : null,
+      })),
+    );
   },
 });
 

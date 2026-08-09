@@ -106,8 +106,27 @@ def enrich(domain: str, timeout: float = _DEFAULT_TIMEOUT) -> dict[str, Any]:
         executor.shutdown(wait=False, cancel_futures=True)
 
 
-def _record(client: Any, payload: dict[str, Any], report_danger: bool) -> None:
+def _record(
+    client: Any,
+    payload: dict[str, Any],
+    report_danger: bool,
+    screenshot: bytes | None = None,
+) -> None:
     try:
+        if screenshot:
+            import requests
+
+            upload_url = client.mutation("scans:generateScreenshotUploadUrl", {})
+            response = requests.post(
+                upload_url,
+                data=screenshot,
+                headers={"Content-Type": "image/webp"},
+                timeout=5,
+            )
+            response.raise_for_status()
+            storage_id = response.json().get("storageId")
+            if isinstance(storage_id, str) and storage_id:
+                payload["screenshotId"] = storage_id
         client.mutation("scans:recordScan", payload)
         if report_danger and payload.get("domain"):
             client.mutation("community:reportDanger", {
@@ -153,6 +172,7 @@ def record_scan(
     user_id: str | None = None,
     text: str | None = None,
     text_hash: str | None = None,
+    screenshot: bytes | None = None,
     **_ignored: Any,
 ) -> None:
     """Queue an allowlisted scan payload without blocking or raising."""
@@ -178,6 +198,13 @@ def record_scan(
         if digest:
             payload["textHash"] = digest
         logger.debug("Convex outbound payload: %r", payload)
-        _record_executor.submit(_record, client, payload, verdict == "DANGER")
+        safe_screenshot = screenshot if isinstance(screenshot, bytes) and len(screenshot) <= 5_000_000 else None
+        _record_executor.submit(
+            _record,
+            client,
+            payload,
+            verdict == "DANGER",
+            safe_screenshot,
+        )
     except Exception:
         logger.warning("Could not queue Convex scan", exc_info=True)

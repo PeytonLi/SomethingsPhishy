@@ -29,17 +29,16 @@ mcp = FastMCP("somethings-phishy")
 T = TypeVar("T")
 CALL_TIMEOUT_SECONDS = 1.0
 
-# Inline fallbacks unblock this track while context, explanation, and Convex
-# are built in parallel. Their real modules replace these imports unchanged.
+# Optional providers must degrade without fabricating evidence.
 try:
-    from context import capture as _capture
+    from context import capture as _capture, capture_screenshot as _capture_screenshot
 except (ImportError, ModuleNotFoundError):
     def _capture(surface: str = "any") -> ScreenContext:
-        return ScreenContext(
-            text="PayPal security check. Confirm your account now.",
-            links=[("paypal.com", "https://paypa1-secure.ru/x")],
-            page_url="https://paypa1-secure.ru/x",
-        )
+        del surface
+        return ScreenContext(observed_fields=set())
+
+    def _capture_screenshot() -> bytes | None:
+        return None
 
 try:
     from explain import humanize as _humanize
@@ -172,7 +171,26 @@ def _domain_created(enrichment: dict[str, Any]) -> datetime | None:
 
 
 def _scan(surface: str) -> str:
-    context = _safe_call(_capture, surface, fallback=ScreenContext())
+    context = _safe_call(
+        _capture, surface, fallback=ScreenContext(observed_fields=set())
+    )
+    has_evidence = bool(
+        context.text or context.links or context.page_url or context.clipboard_text
+        or context.download_filename or context.from_address
+        or context.displayed_address or context.clipboard_address
+    )
+    if not has_evidence:
+        return render_verdict_card({
+            "verdict": "CAUTION",
+            "findings": [{
+                "code": "CAPTURE_UNAVAILABLE",
+                "title": "I couldn't inspect the active window",
+                "evidence": "No readable page, app text, clipboard, or recent download was available.",
+            }],
+            "finding_count": 1,
+            "action": "Keep this window open and try the check again before continuing.",
+            "explainable": False,
+        })
 
     # Enrichment has to run BEFORE analyze(): domain age is a DECISIVE finding,
     # so it must reach the engine while the verdict is still being computed.
@@ -193,7 +211,9 @@ def _scan(surface: str) -> str:
     if enrichment:
         result["enrichment"] = enrichment
 
-    humanized = _safe_call(_humanize, dict(result), fallback=dict(result))
+    humanized = _safe_call(
+        _humanize, dict(result), fallback=dict(result), timeout=1.3
+    )
     if isinstance(humanized, dict):
         revised_by_code = {
             str(item.get("code")): item
@@ -213,20 +233,23 @@ def _scan(surface: str) -> str:
     # Never pass ScreenContext: clipboard contents and other raw capture stay
     # local. Only verdict, finding codes, the registrable domain, and a hash of
     # page text leave the machine — convex_client does the hashing.
-    _safe_call(
-        _record_scan,
-        str(result.get("verdict", "")),
-        [
-            str(finding.get("code"))
-            for finding in result["findings"]
-            if isinstance(finding, dict) and finding.get("code")
-        ],
-        domain or None,
-        fallback=None,
-        surface=surface,
-        findings=result["findings"],
-        text=context.text or None,
-    )
+    # Routine SAFE checks are useful to the person asking, but they are not
+    # alerts and should not clutter the guardian's shared history.
+    if result.get("verdict") != "SAFE":
+        _safe_call(
+            _record_scan,
+            str(result.get("verdict", "")),
+            [
+                str(finding.get("code"))
+                for finding in result["findings"]
+                if isinstance(finding, dict) and finding.get("code")
+            ],
+            domain or None,
+            fallback=None,
+            surface=surface,
+            findings=result["findings"],
+            text=context.text or None,
+        )
     return render_verdict_card(result)
 
 
@@ -314,6 +337,7 @@ def alert_my_guardian() -> str:
     a bank, emergency services, or anyone who is not the configured contact.
     """
     context = _safe_call(_capture, "any", fallback=ScreenContext())
+    screenshot = _safe_call(_capture_screenshot, fallback=None)
     result = _normalise_result(
         _safe_call(analyze, context, fallback=_normalise_result(None))
     )
@@ -330,6 +354,7 @@ def alert_my_guardian() -> str:
         surface="guardian",
         findings=result["findings"],
         text=context.text or None,
+        screenshot=screenshot,
     )
     # record_scan is fire-and-forget by design, so delivery is not confirmable
     # here. Don't promise it — the dashboard is the receipt.

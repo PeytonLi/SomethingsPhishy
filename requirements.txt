@@ -10,4 +10,6 @@ anthropic
 
 # P1 — skip if the demo is browser-only
 pywin32             # Outlook COM email headers
-uiautomation        # UIA fallback when CDP is unavailable
+uiautomation==2.0.29 # foreground UIA baseline
+Pillow==11.3.0      # in-memory foreground screenshots for OCR fallback
+winocr==0.0.15      # local Windows OCR; no subprocess or cloud service

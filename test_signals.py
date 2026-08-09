@@ -63,6 +63,21 @@ class TrackCWindowsTests(unittest.TestCase):
         self.assertIn("SEED_PHRASE_REQUEST",self.codes(ScreenContext(text="Enter your 12-word recovery phrase")))
         self.assertNotIn("FAKE_PAYMENT_PROCESSOR",self.codes(ScreenContext(text="Powered by Stripe Card number CVV",page_url="https://merchant.test",iframe_origins=["https://js.stripe.com"])))
 
+    def test_stripe_requires_observed_origin_evidence(self):
+        uia_only = ScreenContext(
+            text="Powered by Stripe Card number CVV",
+            page_url="https://merchant.test",
+            observed_fields={"text", "page_url"},
+        )
+        self.assertNotIn("FAKE_PAYMENT_PROCESSOR", self.codes(uia_only))
+
+    def test_hosted_stripe_checkout_is_not_treated_as_clone(self):
+        hosted = ScreenContext(
+            text="Powered by Stripe Card number CVV",
+            page_url="https://checkout.stripe.com/c/pay/test",
+        )
+        self.assertEqual("SAFE", analyze(hosted)["verdict"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ import { mutation, query } from "./_generated/server";
 export const link = mutation({
   args: {
     protectedUserId: v.string(),
+    protectedName: v.optional(v.string()),
     guardianUserId: v.string(),
     guardianEmail: v.optional(v.string()),
     guardianPhone: v.optional(v.string()),
@@ -27,6 +28,7 @@ export const link = mutation({
 
     const value = {
       protectedUserId: args.protectedUserId,
+      protectedName: args.protectedName?.trim() || undefined,
       guardianUserId: args.guardianUserId,
       guardianEmail: args.guardianEmail,
       guardianPhone: args.guardianPhone,
@@ -39,6 +41,15 @@ export const link = mutation({
     }
     return ctx.db.insert("guardians", value);
   },
+});
+
+export const myCircle = query({
+  args: { guardianUserId: v.string() },
+  handler: async (ctx, { guardianUserId }) =>
+    ctx.db
+      .query("guardians")
+      .withIndex("by_guardian", (q) => q.eq("guardianUserId", guardianUserId))
+      .take(50),
 });
 
 export const unlink = mutation({

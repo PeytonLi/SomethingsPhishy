@@ -9,6 +9,7 @@ export const seededScans: Scan[] = [
     surface: "email",
     verdict: "DANGER",
     domain: "paypa1-secure.ru",
+    screenshotUrl: "https://placehold.co/1200x675/0b2730/dcf8f2.webp?text=Suspicious+PayPal+security+alert",
     findingCodes: ["LINK_TEXT_MISMATCH", "YOUNG_DOMAIN"],
     findingsRedacted: [
       { code: "LINK_TEXT_MISMATCH", severity: 4, title: "Link destination does not match its label", evidence: "Displayed PayPal link opens a different domain" },
@@ -55,3 +56,12 @@ export const seededScans: Scan[] = [
     createdAt: now - 16 * 24 * 60 * 60 * 1000,
   },
 ];
+
+export const seededCircle = [{
+  _id: "seed-circle-logan",
+  protectedUserId: "margaret-demo",
+  protectedName: "Logan",
+  guardianUserId: "dan-demo",
+  alertOn: ["DANGER", "CAUTION"],
+  consentGivenAt: now - 42 * 24 * 60 * 60 * 1000,
+}];

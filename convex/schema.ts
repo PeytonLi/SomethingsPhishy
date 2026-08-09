@@ -51,6 +51,7 @@ export default defineSchema({
       }),
     ),
     textHash: v.optional(v.string()),
+    screenshotId: v.optional(v.id("_storage")),
     acknowledged: v.boolean(),
     createdAt: v.number(),
   })
@@ -59,6 +60,7 @@ export default defineSchema({
 
   guardians: defineTable({
     protectedUserId: v.string(),
+    protectedName: v.optional(v.string()),
     guardianUserId: v.string(),
     guardianEmail: v.optional(v.string()),
     guardianPhone: v.optional(v.string()),
