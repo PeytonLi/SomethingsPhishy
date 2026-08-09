@@ -35,7 +35,7 @@ export const recordScan = mutation({
     });
 
     if (args.verdict === "DANGER") {
-      await ctx.scheduler.runAfter(60_000, internal.alerts.notifyGuardian, {
+      await ctx.scheduler.runAfter(60_000, internal.alerts.notifyGuardianScheduled, {
         scanId,
       });
     }

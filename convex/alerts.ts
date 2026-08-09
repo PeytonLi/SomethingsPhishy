@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { internalAction, internalQuery } from "./_generated/server";
+import { action, internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 export const getAlertContext = internalQuery({
@@ -20,11 +20,17 @@ export const getAlertContext = internalQuery({
   },
 });
 
-export const notifyGuardian = internalAction({
+export const notifyGuardian = action({
   args: { scanId: v.id("scans") },
   handler: async (ctx, { scanId }) => {
     // Reading this query after 60 seconds makes acknowledgement cancel escalation.
     // Delivery providers are intentionally optional; the reactive feed is primary.
     return ctx.runQuery(internal.alerts.getAlertContext, { scanId });
   },
+});
+
+export const notifyGuardianScheduled = internalAction({
+  args: { scanId: v.id("scans") },
+  handler: async (ctx, { scanId }) =>
+    ctx.runQuery(internal.alerts.getAlertContext, { scanId }),
 });

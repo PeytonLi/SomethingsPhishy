@@ -9,7 +9,13 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "convex/*": [
+        "node_modules/convex/*"
+      ]
+    }
   },
   "include": [
     "../**/*.ts"
