@@ -79,6 +79,9 @@ class ScreenContext:
     download_button_text: Optional[str] = None  # what the button PROMISES
     content_type: Optional[str] = None        # server MIME, if observable
     file_size_bytes: Optional[int] = None
+    clipboard_text: str = ""
+    download_host_url: Optional[str] = None
+    download_referrer_url: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
