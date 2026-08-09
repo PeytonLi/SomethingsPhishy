@@ -13,6 +13,10 @@ Surfaces covered: email, web checkout (incl. Stripe), crypto payment prompts.
 from __future__ import annotations
 
 import re
+
+import tldextract
+
+from data.brands import ESP_TRACKING_DOMAINS, GENERIC_ESP_TRACKING_DOMAINS
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import IntEnum
@@ -120,7 +124,7 @@ HOMOGLYPHS = {
     "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t",
     "а": "a", "е": "e", "о": "o", "р": "p",
     "с": "c", "х": "x", "у": "y", "і": "i",
-    "rn": "m", "vv": "w",
+    "vv": "w",
 }
 
 SHORTENERS = {"bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd",
@@ -271,18 +275,15 @@ def _host(url: str) -> str:
         return ""
 
 
+_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
+
+
 def registrable(host: str) -> str:
-    """Approximate eTLD+1. Good enough for demo; swap in `tldextract` for the
-    real multi-part TLD list (.co.uk, .com.au) before you ship."""
+    """Return the registrable domain using the bundled public suffix list."""
     if not host:
         return ""
-    parts = host.split(".")
-    if len(parts) <= 2:
-        return host
-    two_part_tlds = {"co.uk", "com.au", "co.jp", "co.nz", "com.br", "co.za", "org.uk"}
-    if ".".join(parts[-2:]) in two_part_tlds and len(parts) >= 3:
-        return ".".join(parts[-3:])
-    return ".".join(parts[-2:])
+    extracted = _TLD_EXTRACT(host.lower().strip("."))
+    return extracted.top_domain_under_public_suffix or extracted.domain
 
 
 def _fold(s: str) -> str:
@@ -334,7 +335,9 @@ def check_link_mismatch(ctx: ScreenContext) -> list[Finding]:
         actual_dom = registrable(_host(href))
         if not actual_dom or claimed_dom == actual_dom:
             continue
-        # Ignore benign subdomain/CDN variance of the same registrable domain.
+        allowed = ESP_TRACKING_DOMAINS.get(claimed_dom, set())
+        if actual_dom in allowed or actual_dom in GENERIC_ESP_TRACKING_DOMAINS:
+            continue
         out.append(Finding(
             code="LINK_TEXT_HREF_MISMATCH",
             severity=Severity.CRITICAL,
@@ -361,11 +364,13 @@ def check_lookalike_domain(ctx: ScreenContext) -> list[Finding]:
         seen.add(dom)
         label = dom.split(".")[0]
         folded = _fold(label)
+        exact_folds = {folded, folded.replace("rn", "m")}
         for brand, real in IMPERSONATED_BRANDS.items():
             if dom == real:
                 break
-            # Exact fold match = deliberate homoglyph swap. Damning.
-            if folded == brand and label != brand:
+            # Multi-character folds are only safe for exact brand matches;
+            # applying them before fuzzy matching mangles ordinary labels.
+            if brand in exact_folds and label != brand:
                 out.append(Finding(
                     code="HOMOGLYPH_DOMAIN",
                     severity=Severity.CRITICAL,
