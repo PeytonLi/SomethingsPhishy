@@ -10,13 +10,15 @@ import logging
 import queue
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
-from signals import ScreenContext, analyze
+from signals import ScreenContext, analyze, registrable
+from signals import _host as _url_host  # same project; no public url->host helper
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env.local")
@@ -48,10 +50,17 @@ except (ImportError, ModuleNotFoundError):
 try:
     from convex_client import enrich as _enrich, record_scan as _record_scan
 except (ImportError, ModuleNotFoundError):
-    def _enrich(result: dict[str, Any], *_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        return result
+    # Signatures mirror convex_client exactly — a stub that drifts from the real
+    # module fails silently once the import starts succeeding.
+    def _enrich(domain: str, timeout: float = 1.5) -> dict[str, Any]:
+        return {}
 
-    def _record_scan(_result: dict[str, Any], *_args: Any, **_kwargs: Any) -> None:
+    def _record_scan(
+        verdict: str,
+        codes: list[str],
+        domain: str | None = None,
+        **_kwargs: Any,
+    ) -> None:
         return None
 
 _last_findings: dict[str, dict[str, Any]] = {}
@@ -148,17 +157,41 @@ def _remember_findings(result: dict[str, Any]) -> None:
         _last_findings.update(remembered)
 
 
+def _domain_created(enrichment: dict[str, Any]) -> datetime | None:
+    """RDAP registration date out of Convex intel, as an aware datetime."""
+    intel = enrichment.get("intel")
+    if not isinstance(intel, dict):
+        return None
+    registered_at = intel.get("registeredAt")
+    if not isinstance(registered_at, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(registered_at / 1000, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
 def _scan(surface: str) -> str:
     context = _safe_call(_capture, surface, fallback=ScreenContext())
-    result = _normalise_result(_safe_call(analyze, context, fallback=_normalise_result(None)))
 
-    # The deterministic result remains authoritative. Enrichment can contribute
-    # metadata but cannot replace its verdict, findings, or action.
-    enriched = _safe_call(_enrich, dict(result), fallback=dict(result))
-    if isinstance(enriched, dict):
-        for key in ("enrichment", "domain_created"):
-            if key in enriched:
-                result[key] = enriched[key]
+    # Enrichment has to run BEFORE analyze(): domain age is a DECISIVE finding,
+    # so it must reach the engine while the verdict is still being computed.
+    # Convex stays optional — on timeout this degrades to the local verdict.
+    domain = registrable(_url_host(context.page_url or ""))
+    enrichment = _safe_call(_enrich, domain, fallback={}, timeout=1.8) if domain else {}
+    if not isinstance(enrichment, dict):
+        enrichment = {}
+
+    result = _normalise_result(
+        _safe_call(
+            analyze,
+            context,
+            _domain_created(enrichment),
+            fallback=_normalise_result(None),
+        )
+    )
+    if enrichment:
+        result["enrichment"] = enrichment
 
     humanized = _safe_call(_humanize, dict(result), fallback=dict(result))
     if isinstance(humanized, dict):
@@ -177,9 +210,21 @@ def _scan(surface: str) -> str:
             result["action"] = str(humanized["action"])
 
     _remember_findings(result)
-    # Never pass ScreenContext: clipboard contents and other raw capture remain
-    # local. Only the deterministic, evidence-limited result may be recorded.
-    _safe_call(_record_scan, dict(result), fallback=None)
+    # Never pass ScreenContext: clipboard contents and other raw capture stay
+    # local. Only verdict, finding codes, the registrable domain, and a hash of
+    # page text leave the machine — convex_client does the hashing.
+    _safe_call(
+        _record_scan,
+        str(result.get("verdict", "")),
+        [
+            str(finding.get("code"))
+            for finding in result["findings"]
+            if isinstance(finding, dict) and finding.get("code")
+        ],
+        domain or None,
+        fallback=None,
+        text=context.text or None,
+    )
     return render_verdict_card(result)
 
 
@@ -270,15 +315,35 @@ def alert_my_guardian() -> str:
     result = _normalise_result(
         _safe_call(analyze, context, fallback=_normalise_result(None))
     )
-    payload = dict(result)
-    payload["alert_guardian"] = True
-    recorded = _safe_call(_record_scan, payload, fallback=False)
-    if recorded is False:
-        return "I could not reach your trusted contact. Stop here and contact someone you trust directly."
-    return "Your trusted contact has been alerted. Stop here and wait for them to help you."
+    _safe_call(
+        _record_scan,
+        str(result.get("verdict", "")),
+        [
+            str(finding.get("code"))
+            for finding in result["findings"]
+            if isinstance(finding, dict) and finding.get("code")
+        ],
+        registrable(_url_host(context.page_url or "")) or None,
+        fallback=None,
+        text=context.text or None,
+    )
+    # record_scan is fire-and-forget by design, so delivery is not confirmable
+    # here. Don't promise it — the dashboard is the receipt.
+    return (
+        "I've sent this to your trusted contact. Stop here and wait for them, "
+        "and if you don't hear back, call someone you trust directly."
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Verdict cards lead with ⛔/⚠️/✅ and Windows consoles default to cp1252,
+    # which raises UnicodeEncodeError on the first card that reaches a log.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(description="Something's Phishy MCP server")
     parser.add_argument(
         "--http",
