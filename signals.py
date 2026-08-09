@@ -619,6 +619,89 @@ def check_content(ctx: ScreenContext) -> list[Finding]:
 
 
 # ---------------------------------------------------------------------------
+
+# TRACK-C-WINDOWS
+def _q(s: str) -> str:
+    s = (s or "").strip()
+    return "“" + (s if len(s) <= 200 else s[:199] + "…") + "”"
+
+def check_windows(ctx: ScreenContext) -> list[Finding]:
+    out, text, clip = [], ctx.text or "", ctx.clipboard_text or ""
+    name = ctx.download_filename or ""
+    ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
+    def add(code, sev, title, observed):
+        out.append(Finding(code, sev, title, f"Observed {_q(observed)}.", "download"))
+    try:
+        launch = re.search(r"\bwin(?:dows)?(?: key)?\s*\+\s*[rx]\b|⊞\s*\+\s*[rx]|open (?:windows )?powershell|open (?:the )?command prompt", text, re.I)
+        follow = re.search(r"\bpaste\b|(?:press|hit) enter|verify (?:that )?you(?: are|'re) human", text, re.I)
+        if launch and follow: add("CLICKFIX_COMMAND", Severity.CRITICAL, "This page is trying to make you run a Windows command", launch.group(0) + " " + follow.group(0))
+    except Exception: pass
+    try:
+        interp = re.search(r"\b(?:powershell|pwsh|mshta|wscript|cscript)\b|cmd\.exe\s+/c", clip, re.I)
+        dl = re.search(r"\b(?:iex|iwr|irm|invoke-expression|invoke-webrequest|downloadstring|downloadfile|start-bitstransfer)\b", clip, re.I)
+        bad = re.search(r"-encodedcommand|-enc\s|-w\s+hidden|-windowstyle\s+hidden|-nop\b|-noprofile|-ep\s+bypass|-executionpolicy\s+bypass|certutil\s+-(?:urlcache|decode)|bitsadmin\s+/transfer|regsvr32\s+/s\s+/u\s+/i:|rundll32|msiexec\s+/i\s+http|curl[^\n]*\||[A-Za-z0-9+/]{100,}={0,2}|\[char\]|\s-join|frombase64string|#\s*verification\s*:\s*i am not a robot|✅\s*human verification", clip, re.I)
+        clickfix = any(f.code == "CLICKFIX_COMMAND" for f in out)
+        if clip and (bad or (interp and clickfix)): add("CLIPBOARD_PAYLOAD", Severity.CRITICAL, "A Windows command payload is on the clipboard", clip)
+        elif clip and dl: add("CLIPBOARD_PAYLOAD", Severity.MEDIUM, "The clipboard contains a download command", clip)
+    except Exception: pass
+    try:
+        double = "\u202e" in name or re.search(r"\.(?:pdf|docx?|xlsx?|pptx?|jpe?g|png|txt)\.(?:exe|scr|com|bat|cmd|msi|vbs|js|hta|ps1|lnk)$", name, re.I)
+        if double: add("DOUBLE_EXTENSION", Severity.CRITICAL, "The filename disguises a program", name)
+    except Exception: pass
+    try:
+        if ext in DANGEROUS_EXT and re.search(DOC_PROMISE, ctx.download_button_text or "", re.I): add("DOWNLOAD_TYPE_MISMATCH", Severity.CRITICAL, "The file is not the promised document", (ctx.download_button_text or "") + " -> " + name)
+    except Exception: pass
+    try:
+        m = re.search(r"(?:update|install|download)[^.]{0,45}(?:chrome|firefox|edge|browser|flash|java)|(?:chrome|firefox|edge|browser|flash|java)[^.]{0,45}(?:update|installer)", text, re.I)
+        official = registrable(_host(ctx.page_url or "")) in {"google.com","chrome.com","mozilla.org","mozilla.net","microsoft.com","java.com","oracle.com"}
+        if m and ("flash" in m.group(0).lower() or not official): add("FAKE_BROWSER_UPDATE", Severity.CRITICAL, "This page offers an unsafe update", m.group(0))
+    except Exception: pass
+    try:
+        m = re.search(r"(?:disable|turn off) (?:windows )?defender|add (?:this|an?) exclusion|turn off real-time protection|whitelist this folder", text, re.I)
+        if m: add("DISABLE_ANTIVIRUS", Severity.CRITICAL, "The page asks you to weaken antivirus", m.group(0))
+    except Exception: pass
+    try:
+        a = re.search(r"your (?:computer|pc) is infected|windows defender (?:security )?(?:alert|warning)|virus detected", text, re.I); b = re.search(r"(?:do not|don't) shut down|\+?\d[\d ()-]{8,}\d", text, re.I)
+        if a and b: add("TECH_SUPPORT_SCARE", Severity.CRITICAL, "This is a fake support warning", a.group(0)+" "+b.group(0))
+    except Exception: pass
+    try:
+        hosts = {registrable(_host(u)) for u in (ctx.page_url,ctx.download_url,ctx.download_host_url) if u and _host(u)}
+        for rx, label, official in OFFICIAL_SOFTWARE:
+            m = re.search(rx, text, re.I)
+            if m and hosts and not hosts & (official | TRUSTED_DOWNLOAD_HOSTS): add("SOFTWARE_IMPERSONATION", Severity.CRITICAL if ext in DANGEROUS_EXT else Severity.HIGH, "This download impersonates "+label, m.group(0)+" at "+sorted(hosts)[0]); break
+    except Exception: pass
+    try:
+        h, r = registrable(_host(ctx.download_host_url or "")), registrable(_host(ctx.download_referrer_url or ""))
+        trusted = TRUSTED_DOWNLOAD_HOSTS | {d for _,_,ds in OFFICIAL_SOFTWARE for d in ds}
+        if h and r and h != r and h not in trusted: add("DOWNLOAD_HOST_MISMATCH", Severity.HIGH if ext in DANGEROUS_EXT else Severity.MEDIUM, "The file came from a different host", (ctx.download_host_url or "")+" vs "+(ctx.download_referrer_url or ""))
+    except Exception: pass
+    try:
+        m = re.search(r"Zone\.Identifier\s*:\s*(?:absent|missing)", text, re.I)
+        if m and ext in DANGEROUS_EXT: add("MOTW_STRIPPED", Severity.HIGH, "The executable lacks its internet-origin marker", m.group(0)+" "+name)
+    except Exception: pass
+    try:
+        m = re.search(r"[^\s,;]+\.lnk\b", text, re.I)
+        if ext in ARCHIVE_EXT and m: add("LNK_IN_ARCHIVE", Severity.HIGH, "The archive contains a Windows shortcut", name+" contains "+m.group(0))
+    except Exception: pass
+    try:
+        if ext in MOTW_EVASION_EXT and (re.search(DOC_PROMISE, text, re.I) or re.search(DOC_PROMISE,ctx.download_button_text or "",re.I)): add("MOTW_EVASION_CONTAINER",Severity.HIGH,"A container is posing as a document",(ctx.download_button_text or text)+" -> "+name)
+    except Exception: pass
+    try:
+        m = re.search(r"\b(?:password|passcode)\s*(?:is|:)?\s*[\w@#$%.-]{3,}", text, re.I)
+        if ext in ARCHIVE_EXT and m: add("PASSWORD_PROTECTED_ARCHIVE",Severity.HIGH,"The page supplies an archive password",name+" "+m.group(0))
+    except Exception: pass
+    try:
+        m = re.search(r"\b(?:crack(?:ed)?|keygen|nulled|pre-activated|full version free)\b",text,re.I)
+        if m: add("WAREZ_CRACK",Severity.HIGH,"This is advertised as pirated software",m.group(0))
+    except Exception: pass
+    try:
+        suspicious_source = bool(ctx.download_host_url and ctx.download_referrer_url and registrable(_host(ctx.download_host_url)) != registrable(_host(ctx.download_referrer_url)))
+        if ext in DANGEROUS_EXT and (clickfix or suspicious_source or re.search(r"Zone\.Identifier\s*:\s*(?:absent|missing)", text, re.I)):
+            add("DANGEROUS_EXT",Severity.LOW,"The file can run code",name)
+    except Exception: pass
+    return out
+
+
 # Aggregation
 # ---------------------------------------------------------------------------
 
@@ -627,7 +710,9 @@ DECISIVE = {
     "LINK_TEXT_HREF_MISMATCH", "HOMOGLYPH_DOMAIN", "SEED_PHRASE_REQUEST",
     "ADDRESS_MISMATCH", "ADDRESS_POISONING", "FAKE_PAYMENT_PROCESSOR",
     "SECRECY_INSTRUCTION", "CRYPTO_GIVEAWAY", "INSECURE_PAYMENT_PAGE",
-    "DOMAIN_VERY_NEW",
+    "DOMAIN_VERY_NEW", "CLICKFIX_COMMAND",
+    "DOUBLE_EXTENSION", "DOWNLOAD_TYPE_MISMATCH", "FAKE_BROWSER_UPDATE",
+    "DISABLE_ANTIVIRUS", "TECH_SUPPORT_SCARE",
 }
 
 
@@ -635,7 +720,8 @@ def analyze(ctx: ScreenContext,
             domain_created: Optional[datetime] = None) -> dict:
     findings: list[Finding] = []
     for check in (check_link_mismatch, check_lookalike_domain, check_url_hygiene,
-                  check_sender, check_checkout, check_crypto, check_content):
+                  check_sender, check_checkout, check_crypto, check_content,
+                  check_windows):
         try:
             findings.extend(check(ctx))
         except Exception:
@@ -654,7 +740,9 @@ def analyze(ctx: ScreenContext,
     codes = {f.code for f in findings}
     highs = sum(1 for f in findings if f.severity >= Severity.HIGH)
 
-    if codes & DECISIVE or highs >= 2:
+    critical_clipboard = any(f.code == "CLIPBOARD_PAYLOAD" and f.severity == Severity.CRITICAL for f in findings)
+
+    if codes & DECISIVE or critical_clipboard or highs >= 2:
         verdict = Verdict.DANGER
     elif highs == 1 or any(f.severity == Severity.MEDIUM for f in findings):
         verdict = Verdict.CAUTION
@@ -675,6 +763,8 @@ def _action(verdict: Verdict, codes: set[str]) -> str:
     """One concrete instruction. Advise — never act on the user's behalf."""
     if verdict is Verdict.SAFE:
         return "Nothing suspicious found. If you're still unsure, contact the company directly."
+    if codes & {"CLICKFIX_COMMAND", "CLIPBOARD_PAYLOAD"}:
+        return "Do not run or paste this command. Clear your clipboard and close the page."
     if codes & {"SEED_PHRASE_REQUEST", "ADDRESS_MISMATCH", "ADDRESS_POISONING",
                 "CRYPTO_GIVEAWAY", "DANGEROUS_APPROVAL"}:
         return ("Do not approve this transaction and never enter your recovery phrase. "
