@@ -1,0 +1,10 @@
+.env
+.env.local
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+build/
+.convex/
+data/corpus/*.raw

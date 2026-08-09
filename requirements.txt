@@ -1,0 +1,13 @@
+# P0
+mcp
+pyperclip           # clipboard, in-process Win32 — never shell out to Get-Clipboard
+websocket-client    # Chrome DevTools Protocol
+tldextract          # replaces the hardcoded eTLD+1 guess in signals.registrable()
+requests
+python-dotenv
+convex
+anthropic
+
+# P1 — skip if the demo is browser-only
+pywin32             # Outlook COM email headers
+uiautomation        # UIA fallback when CDP is unavailable
