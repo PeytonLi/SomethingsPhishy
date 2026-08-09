@@ -223,6 +223,8 @@ def _scan(surface: str) -> str:
         ],
         domain or None,
         fallback=None,
+        surface=surface,
+        findings=result["findings"],
         text=context.text or None,
     )
     return render_verdict_card(result)
@@ -325,6 +327,8 @@ def alert_my_guardian() -> str:
         ],
         registrable(_url_host(context.page_url or "")) or None,
         fallback=None,
+        surface="guardian",
+        findings=result["findings"],
         text=context.text or None,
     )
     # record_scan is fire-and-forget by design, so delivery is not confirmable

@@ -110,10 +110,37 @@ def _record(client: Any, payload: dict[str, Any], report_danger: bool) -> None:
     try:
         client.mutation("scans:recordScan", payload)
         if report_danger and payload.get("domain"):
-            report = {"domain": payload["domain"], "codes": payload["codes"]}
-            client.mutation("community:reportDanger", report)
+            client.mutation("community:reportDanger", {
+                "domain": payload["domain"],
+                "codes": payload["findingCodes"],
+                "userId": payload["userId"],
+            })
     except Exception:
         logger.warning("Convex scan recording failed", exc_info=True)
+
+
+# Codes whose evidence quotes something local and secret. The clipboard
+# routinely holds passwords, so its contents must never leave the machine —
+# the code and title still tell the guardian everything they need.
+_EVIDENCE_WITHHELD = {"CLIPBOARD_PAYLOAD"}
+
+
+def _safe_findings(findings: Any) -> list[dict[str, Any]]:
+    """Shape findings for scans.findingsRedacted, dropping local secrets."""
+    out: list[dict[str, Any]] = []
+    for item in findings or []:
+        if not isinstance(item, dict) or not item.get("code"):
+            continue
+        code = str(item["code"])
+        evidence = str(item.get("evidence", ""))
+        out.append({
+            "code": code,
+            "severity": int(item.get("severity", 0) or 0),
+            "title": str(item.get("title", "")),
+            "evidence": "[withheld: local clipboard contents]"
+                        if code in _EVIDENCE_WITHHELD else evidence,
+        })
+    return out
 
 
 def record_scan(
@@ -121,6 +148,9 @@ def record_scan(
     codes: list[str],
     domain: str | None = None,
     *,
+    surface: str = "any",
+    findings: Any = None,
+    user_id: str | None = None,
     text: str | None = None,
     text_hash: str | None = None,
     **_ignored: Any,
@@ -130,7 +160,15 @@ def record_scan(
         client = _get_client()
         if client is None or verdict not in {"SAFE", "CAUTION", "DANGER"}:
             return
-        payload: dict[str, Any] = {"verdict": verdict, "codes": _safe_codes(codes)}
+        # Field names mirror convex/scans.ts recordScan exactly. A mismatch here
+        # is silent from Python's side but rejected by the server validator.
+        payload: dict[str, Any] = {
+            "userId": user_id or os.environ.get("SP_USER_ID", "margaret-demo"),
+            "surface": str(surface or "any"),
+            "verdict": verdict,
+            "findingCodes": _safe_codes(codes),
+            "findingsRedacted": _safe_findings(findings),
+        }
         safe_domain = _safe_domain(domain)
         if safe_domain:
             payload["domain"] = safe_domain

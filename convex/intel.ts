@@ -60,9 +60,9 @@ export const upsertDomainIntelInternal = internalMutation({
 
 export const refreshDomainIntel = action({
   args: { domain: v.string(), force: v.optional(v.boolean()) },
-  handler: async (ctx, { domain, force }) => {
+  handler: async (ctx, { domain, force }): Promise<any> => {
     const normalized = normalizeDomain(domain);
-    const cached = await ctx.runQuery(api.intel.getDomainIntel, { domain: normalized });
+    const cached: any = await ctx.runQuery(api.intel.getDomainIntel, { domain: normalized });
     if (cached && !cached.stale && !force) return cached;
 
     const response = await fetch(`https://rdap.org/domain/${encodeURIComponent(normalized)}`, {

@@ -22,7 +22,7 @@ export const getAlertContext = internalQuery({
 
 export const notifyGuardian = action({
   args: { scanId: v.id("scans") },
-  handler: async (ctx, { scanId }) => {
+  handler: async (ctx, { scanId }): Promise<any> => {
     // Reading this query after 60 seconds makes acknowledgement cancel escalation.
     // Delivery providers are intentionally optional; the reactive feed is primary.
     return ctx.runQuery(internal.alerts.getAlertContext, { scanId });
@@ -31,6 +31,6 @@ export const notifyGuardian = action({
 
 export const notifyGuardianScheduled = internalAction({
   args: { scanId: v.id("scans") },
-  handler: async (ctx, { scanId }) =>
+  handler: async (ctx, { scanId }): Promise<any> =>
     ctx.runQuery(internal.alerts.getAlertContext, { scanId }),
 });

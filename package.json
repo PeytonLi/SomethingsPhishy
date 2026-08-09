@@ -1,0 +1,19 @@
+{
+  "name": "somethingsphishy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "convex": "convex dev",
+    "convex:once": "convex dev --once",
+    "dashboard": "npm --prefix dashboard run dev",
+    "test:convex": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "convex": "^1.25.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scrubPii } from "../../privacy";
+import { scrubPii } from "../../convex/privacy";
 
 describe("scrubPii", () => {
   it("removes email addresses and phone numbers before persistence", () => {

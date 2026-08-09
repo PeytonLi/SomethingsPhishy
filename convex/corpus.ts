@@ -45,7 +45,7 @@ export const ingestCorpusItem = action({
     consentGiven: v.boolean(),
     provenance: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     if (!args.consentGiven) throw new Error("Corpus contribution requires explicit consent");
     if (args.embedding.length !== DIMENSIONS) {
       throw new Error(`Embedding must contain ${DIMENSIONS} values`);
