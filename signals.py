@@ -108,6 +108,7 @@ IMPERSONATED_BRANDS = {
     "ledger": "ledger.com",
     "binance": "binance.com",
     "stripe": "stripe.com",
+    "ebay": "ebay.com",
     "docusign": "docusign.com",
     "fedex": "fedex.com",
     "usps": "usps.com",
@@ -275,7 +276,15 @@ def _host(url: str) -> str:
         return ""
 
 
-_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
+# suffix_list_urls=() pins the bundled snapshot: no network fetch, ever.
+# include_psl_private_domains=True keeps free hosting suffixes separable, so
+# evil.pages.dev and real.pages.dev are distinct registrable domains. Without
+# it both collapse to "pages.dev", and three unrelated phishing sites would
+# promote the whole suffix in communityFlags — flagging every legitimate
+# Cloudflare Pages site. Same for workers.dev, web.app, github.io, r2.dev.
+_TLD_EXTRACT = tldextract.TLDExtract(
+    suffix_list_urls=(), include_psl_private_domains=True
+)
 
 
 def registrable(host: str) -> str:
@@ -455,6 +464,42 @@ def check_sender(ctx: ScreenContext) -> list[Finding]:
                 f"Sent from “{domain}” but replies go to “{rt_domain}”.",
                 "email"))
     return out
+
+
+def check_body_brand_mismatch(ctx: ScreenContext) -> list[Finding]:
+    """Body speaks as a brand, but not one link belongs to that brand.
+
+    HIGH and deliberately not DECISIVE: a newsletter may legitimately mention a
+    company without linking to it, so this raises CAUTION on its own and only
+    reaches DANGER alongside a second HIGH finding.
+    """
+    text = (ctx.text or "").lower()
+    link_domains = {registrable(_host(href)) for _, href in ctx.links if _host(href)}
+    if not link_domains:
+        return []
+
+    mentioned = [
+        (brand, real)
+        for brand, real in IMPERSONATED_BRANDS.items()
+        if re.search(rf"\b{re.escape(brand)}\b", text)
+    ]
+    if not mentioned:
+        return []
+
+    for brand, real in mentioned:
+        allowed = ({real} | ESP_TRACKING_DOMAINS.get(real, set())
+                   | GENERIC_ESP_TRACKING_DOMAINS)
+        if link_domains & allowed:
+            return []  # at least one link really is the brand's — nothing to say
+
+    brand, real = mentioned[0]
+    destination = sorted(link_domains)[0]
+    return [Finding(
+        "BODY_BRAND_LINK_MISMATCH", Severity.HIGH,
+        f"This message talks about {brand.title()} but its links go elsewhere",
+        f"It mentions {brand.title()}, yet every link opens “{destination}” — "
+        f"a site {real} does not own.",
+        "email")]
 
 
 def check_domain_age(domain: str, created: Optional[datetime]) -> list[Finding]:
@@ -720,7 +765,8 @@ def analyze(ctx: ScreenContext,
             domain_created: Optional[datetime] = None) -> dict:
     findings: list[Finding] = []
     for check in (check_link_mismatch, check_lookalike_domain, check_url_hygiene,
-                  check_sender, check_checkout, check_crypto, check_content,
+                  check_sender, check_body_brand_mismatch, check_checkout,
+                  check_crypto, check_content,
                   check_windows):
         try:
             findings.extend(check(ctx))
