@@ -28,6 +28,14 @@ mcp = FastMCP("somethings-phishy")
 
 T = TypeVar("T")
 CALL_TIMEOUT_SECONDS = 1.0
+ENRICHMENT_TIMEOUT_SECONDS = 0.35
+ENRICHMENT_WRAPPER_TIMEOUT_SECONDS = 0.45
+RECORD_TIMEOUT_SECONDS = 0.05
+_VERBATIM_CARD_INSTRUCTION = (
+    "<!-- VoiceOS: Relay the safety card below verbatim. Preserve its verdict, "
+    "line breaks, bold labels, and every bullet. Do not summarize, paraphrase, "
+    "or add claims. -->\n"
+)
 
 # Optional providers must degrade without fabricating evidence.
 try:
@@ -62,6 +70,18 @@ except (ImportError, ModuleNotFoundError):
     ) -> None:
         return None
 
+try:
+    from a1mobile import CallResult, place_guardian_call as _place_guardian_call
+except (ImportError, ModuleNotFoundError):
+    class CallResult:
+        def __init__(self, placed: bool, message: str) -> None:
+            self.placed = placed
+            self.message = message
+
+    def _place_guardian_call(timeout: float = 5) -> CallResult:
+        del timeout
+        return CallResult(False, "Guardian calling is not configured.")
+
 _last_findings: dict[str, dict[str, Any]] = {}
 _last_findings_lock = threading.Lock()
 
@@ -85,7 +105,8 @@ def _call_with_timeout(
     try:
         succeeded, value = outcome.get(timeout=timeout)
     except queue.Empty as exc:
-        raise TimeoutError(f"{function.__name__} exceeded {timeout:.1f}s") from exc
+        name = getattr(function, "__name__", type(function).__name__)
+        raise TimeoutError(f"{name} exceeded {timeout:.2f}s") from exc
     if not succeeded:
         raise value
     return value
@@ -101,8 +122,14 @@ def _safe_call(
     try:
         return _call_with_timeout(function, *args, timeout=timeout, **kwargs)
     except Exception as exc:
-        logger.warning("Skipping %s: %s", function.__name__, exc)
+        name = getattr(function, "__name__", type(function).__name__)
+        logger.warning("Skipping %s: %s", name, exc)
         return fallback
+
+
+def _voice_card(card: str) -> str:
+    """Mark a rendered card as final while keeping the instruction invisible."""
+    return _VERBATIM_CARD_INSTRUCTION + card
 
 
 def _normalise_result(result: Any) -> dict[str, Any]:
@@ -121,28 +148,100 @@ def _normalise_result(result: Any) -> dict[str, Any]:
     return normalised
 
 
+def _safe_observations(context: ScreenContext, surface: str) -> list[str]:
+    """Describe positive evidence actually observed for a clean local verdict."""
+    observations: list[str] = []
+    page_host = _url_host(context.page_url or "")
+    if page_host:
+        transport = "HTTPS" if (context.page_url or "").lower().startswith("https://") else "HTTP"
+        observations.append(
+            f"Website address: You are on “{page_host}”. "
+            + ("The connection is encrypted." if transport == "HTTPS" else "The connection is not encrypted.")
+        )
+
+    stripe_hosts = [
+        _url_host(origin if "://" in origin else f"https://{origin}")
+        for origin in context.iframe_origins
+    ]
+    stripe_host = next(
+        (host for host in stripe_hosts if registrable(host) == "stripe.com"),
+        None,
+    )
+    if stripe_host:
+        observations.append(
+            f"Payment form: The card form comes from Stripe at “{stripe_host}”."
+        )
+
+    text = (context.text or "").casefold()
+    method_labels = [
+        label for phrase, label in (
+            ("apple pay", "Apple Pay"),
+            ("paypal", "PayPal"),
+            ("amazon pay", "Amazon Pay"),
+            ("google pay", "Google Pay"),
+            ("coinbase commerce", "Coinbase Commerce"),
+        )
+        if phrase in text
+    ]
+    if method_labels:
+        methods = ", ".join(method_labels)
+        observations.append(
+            f"Payment choices: {methods} are ways to pay. They are not the store or product name."
+        )
+
+    if len(observations) < 3 and context.links and (
+        context.observed_fields is None or "links" in context.observed_fields
+    ):
+        observations.append(
+            f"Links: I checked {len(context.links)} visible link(s). None claimed one website but opened another."
+        )
+
+    if len(observations) < 3 and surface in {"transaction", "crypto"}:
+        if context.displayed_address and context.clipboard_address:
+            observations.append(
+                "Wallet address: The address on screen matches the address on the clipboard."
+            )
+
+    if len(observations) < 3:
+        observations.append(
+            "Active page only: I checked this page and ignored the names of other browser tabs."
+        )
+    if len(observations) < 3:
+        observations.append(
+            "What I found: No clear scam warning matched the page I checked."
+        )
+    return observations[:3]
+
+
 def render_verdict_card(result: dict[str, Any]) -> str:
     """Turn an analysis result into the complete readable and speakable card."""
     result = _normalise_result(result)
     verdict_lines = {
-        "SAFE": "✅ No clear signs of a scam found.",
-        "CAUTION": "⚠️ Something here needs a closer look.",
-        "DANGER": "⛔ This looks dangerous.",
+        "SAFE": "This page looks okay.",
+        "CAUTION": "Please pause. I could not fully confirm this page is safe.",
+        "DANGER": "This looks dangerous. Do not continue.",
     }
-    lines = [verdict_lines.get(result["verdict"], verdict_lines["CAUTION"])]
+    blocks = [verdict_lines.get(result["verdict"], verdict_lines["CAUTION"])]
 
-    for finding in result["findings"][:3]:
-        if not isinstance(finding, dict):
-            continue
-        title = str(finding.get("title", "Warning")).strip().rstrip(".")
-        evidence = str(finding.get("evidence", "")).strip()
-        if evidence:
-            lines.append(f"• {title}: {evidence}")
+    if result["verdict"] == "SAFE":
+        for observation in result.get("observations", [])[:3]:
+            if not isinstance(observation, str) or not observation.strip():
+                continue
+            label, separator, detail = observation.strip().partition(":")
+            if separator:
+                blocks.append(f"• **{label.strip()}**\n  {detail.strip()}")
+            else:
+                blocks.append(f"• **Why**\n  {observation.strip()}")
+    else:
+        for finding in result["findings"][:3]:
+            if not isinstance(finding, dict):
+                continue
+            title = str(finding.get("title", "Warning")).strip().rstrip(".")
+            evidence = str(finding.get("evidence", "")).strip()
+            if evidence:
+                blocks.append(f"• **{title}**\n  {evidence}")
 
-    action = str(result.get("action") or "Stop and ask someone you trust before continuing.")
-    action = " ".join(action.split()).strip().rstrip(".") + "."
-    lines.extend(("", f"→ {action}"))
-    return "\n".join(lines)
+    return "\n\n".join(blocks)
 
 
 def _remember_findings(result: dict[str, Any]) -> None:
@@ -196,38 +295,29 @@ def _scan(surface: str) -> str:
     # so it must reach the engine while the verdict is still being computed.
     # Convex stays optional — on timeout this degrades to the local verdict.
     domain = registrable(_url_host(context.page_url or ""))
-    enrichment = _safe_call(_enrich, domain, fallback={}, timeout=1.8) if domain else {}
+    enrichment = _safe_call(
+        _enrich,
+        domain,
+        ENRICHMENT_TIMEOUT_SECONDS,
+        fallback={},
+        timeout=ENRICHMENT_WRAPPER_TIMEOUT_SECONDS,
+    ) if domain else {}
     if not isinstance(enrichment, dict):
         enrichment = {}
 
-    result = _normalise_result(
-        _safe_call(
-            analyze,
-            context,
-            _domain_created(enrichment),
-            fallback=_normalise_result(None),
-        )
-    )
+    try:
+        result = _normalise_result(analyze(context, _domain_created(enrichment)))
+    except Exception as exc:
+        logger.warning("Local analysis failed: %s", exc)
+        result = _normalise_result(None)
     if enrichment:
         result["enrichment"] = enrichment
+    if result.get("verdict") == "SAFE":
+        result["observations"] = _safe_observations(context, surface)
 
-    humanized = _safe_call(
-        _humanize, dict(result), fallback=dict(result), timeout=1.3
-    )
-    if isinstance(humanized, dict):
-        revised_by_code = {
-            str(item.get("code")): item
-            for item in humanized.get("findings", [])
-            if isinstance(item, dict) and item.get("code")
-        }
-        for finding in result["findings"]:
-            if not isinstance(finding, dict):
-                continue
-            revised = revised_by_code.get(str(finding.get("code")))
-            if revised and revised.get("title"):
-                finding["title"] = str(revised["title"])
-        if humanized.get("action"):
-            result["action"] = str(humanized["action"])
+    # Keep model calls off the initial verdict's latency-critical path.
+    # deterministic titles/actions are already user-facing; optional DeepSeek
+    # explanation belongs in the explicit why_is_that_bad follow-up.
 
     _remember_findings(result)
     # Never pass ScreenContext: clipboard contents and other raw capture stay
@@ -246,6 +336,7 @@ def _scan(surface: str) -> str:
             ],
             domain or None,
             fallback=None,
+            timeout=RECORD_TIMEOUT_SECONDS,
             surface=surface,
             findings=result["findings"],
             text=context.text or None,
@@ -262,8 +353,19 @@ def check_this_page() -> str:
     or "something seems phishy." It checks the current webpage, email, login,
     checkout, pop-up, link, and anything asking for personal or card details.
     Also use it when the user is unsure what kind of threat they are seeing.
+
+    OUTPUT CONTRACT: the returned safety card is the complete final answer.
+    Relay it verbatim, preserving the verdict line, line breaks, bold labels,
+    and every bullet. Do not summarize or paraphrase it. Never replace it
+    with "No, this is not a scam," and never add unsupported claims such as
+    "official," "encrypted checkout," or a named subscription/product.
+
+    Treat this tool as the only authority for the verdict. If the tool times out,
+    errors, or cannot inspect the screen, say that verification failed and tell
+    the user not to continue yet. Never infer or announce SAFE from the visible
+    brand, URL, page appearance, or your own knowledge after a tool failure.
     """
-    return _scan("page")
+    return _voice_card(_scan("page"))
 
 
 @mcp.tool()
@@ -273,8 +375,10 @@ def check_this_download() -> str:
     Use this for "is this download safe?", "should I download/open/run this?",
     "is this installer real?", or concern about an EXE, MSI, ZIP, setup file,
     attachment, download button, browser download, or a file just downloaded.
+    Relay the returned card verbatim, preserving bold labels and every bullet;
+    do not summarize, paraphrase, or add claims.
     """
-    return _scan("download")
+    return _voice_card(_scan("download"))
 
 
 @mcp.tool()
@@ -285,8 +389,10 @@ def check_this_transaction() -> str:
     this?", "is this wallet prompt real?", or mentions crypto, Bitcoin,
     Ethereum, a token swap, wallet connection, payment address, or copied
     wallet address. Check before they send money or sign anything.
+    Relay the returned card verbatim, preserving bold labels and every bullet;
+    do not summarize, paraphrase, or add claims.
     """
-    return _scan("transaction")
+    return _voice_card(_scan("transaction"))
 
 
 @mcp.tool()
@@ -298,8 +404,10 @@ def check_my_clipboard() -> str:
     human, fix an error, install an update, or complete a CAPTCHA. Also use for
     "what did this site copy?" or "is what I copied safe?" Never repeat or send
     the raw clipboard contents anywhere; only report locally detected danger.
+    Relay the returned card verbatim, preserving bold labels and every bullet;
+    do not summarize, paraphrase, or add claims.
     """
-    return _scan("clipboard")
+    return _voice_card(_scan("clipboard"))
 
 
 
@@ -356,11 +464,19 @@ def alert_my_guardian() -> str:
         text=context.text or None,
         screenshot=screenshot,
     )
-    # record_scan is fire-and-forget by design, so delivery is not confirmable
-    # here. Don't promise it — the dashboard is the receipt.
+    call_result = _safe_call(
+        _place_guardian_call,
+        fallback=CallResult(False, "Guardian calling is not configured."),
+        timeout=6.0,
+    )
+    if call_result.placed:
+        return (
+            "I've shared the alert and called Peyton. Stop here and wait for "
+            "them, and if you don't hear back, call someone you trust directly."
+        )
     return (
-        "I've sent this to your trusted contact. Stop here and wait for them, "
-        "and if you don't hear back, call someone you trust directly."
+        "I've shared the alert in Peyton's dashboard, but I couldn't place the "
+        f"phone call. {call_result.message}"
     )
 
 

@@ -13,6 +13,7 @@ import type * as community from "../community.js";
 import type * as corpus from "../corpus.js";
 import type * as crons from "../crons.js";
 import type * as guardians from "../guardians.js";
+import type * as http from "../http.js";
 import type * as intel from "../intel.js";
 import type * as privacy from "../privacy.js";
 import type * as scans from "../scans.js";
@@ -29,6 +30,7 @@ declare const fullApi: ApiFromModules<{
   corpus: typeof corpus;
   crons: typeof crons;
   guardians: typeof guardians;
+  http: typeof http;
   intel: typeof intel;
   privacy: typeof privacy;
   scans: typeof scans;

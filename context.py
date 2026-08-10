@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from signals import ScreenContext
 
 CDP_URL = "http://127.0.0.1:9222"
 CDP_TIMEOUT = 0.8
+CDP_VISIBILITY_TIMEOUT = 0.2
 DOWNLOAD_FRESHNESS_SECONDS = 15 * 60
 DOM_EXPRESSION = r"""(() => {
   const bodyText = document.body ? document.body.innerText : '';
@@ -144,6 +146,38 @@ def _cdp_targets() -> list[dict[str, Any]]:
     ]
 
 
+def _cdp_visibility(target: dict[str, Any]) -> str:
+    """Return the page visibility state without reading any page content."""
+    if websocket is None:
+        return "unknown"
+    ws = websocket.create_connection(
+        target["webSocketDebuggerUrl"],
+        timeout=CDP_VISIBILITY_TIMEOUT,
+        suppress_origin=True,
+    )
+    try:
+        ws.send(json.dumps({
+            "id": 1,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "document.visibilityState",
+                "returnByValue": True,
+            },
+        }))
+        deadline = time.monotonic() + CDP_VISIBILITY_TIMEOUT
+        while time.monotonic() < deadline:
+            response = json.loads(ws.recv())
+            if response.get("id") == 1:
+                return str(
+                    response.get("result", {}).get("result", {}).get("value", "unknown")
+                )
+        return "unknown"
+    except Exception:
+        return "unknown"
+    finally:
+        ws.close()
+
+
 def _pick_target(targets: list[dict[str, Any]]) -> dict[str, Any]:
     """Select a CDP page only when its title clearly matches the foreground."""
     foreground = " ".join(_foreground_title().split()).casefold()
@@ -160,7 +194,20 @@ def _pick_target(targets: list[dict[str, Any]]) -> dict[str, Any]:
             return target
         if any(title.startswith(foreground + separator) for separator in separators):
             return target
-    raise LookupError("no CDP target confidently matches the foreground window")
+
+    # Voice assistants can take OS focus while the browser's active tab remains
+    # visible. Ask each CDP page for its visibility state in parallel so inactive
+    # tab titles never become the fallback selection signal.
+    visible: list[dict[str, Any]] = []
+    if targets:
+        with ThreadPoolExecutor(max_workers=min(8, len(targets))) as executor:
+            pending = {executor.submit(_cdp_visibility, target): target for target in targets}
+            for future in as_completed(pending):
+                if future.result() == "visible":
+                    visible.append(pending[future])
+    if len(visible) == 1:
+        return visible[0]
+    raise LookupError("no unique visible CDP target matches the active page")
 
 
 def _cdp_dom(target: dict[str, Any]) -> dict[str, Any]:
@@ -193,19 +240,46 @@ def _uia_context() -> tuple[str | None, str]:
         import uiautomation as auto
 
         root = auto.GetForegroundControl()
-        chunks: list[str] = []
+        controls = list(root.GetDescendants(maxDepth=8))
         page_url = None
-        for control in root.GetDescendants(maxDepth=8):
-            name = str(getattr(control, "Name", "") or "").strip()
-            if name:
-                chunks.append(name)
-            if page_url is None and getattr(control, "ControlTypeName", "") == "EditControl":
-                try:
-                    value = str(control.GetValuePattern().Value or "").strip()
-                except Exception:
-                    value = ""
-                if value.startswith(("http://", "https://")):
-                    page_url = value
+        for control in controls:
+            if page_url is not None or getattr(control, "ControlTypeName", "") != "EditControl":
+                continue
+            try:
+                value = str(control.GetValuePattern().Value or "").strip()
+            except Exception:
+                value = ""
+            if value.startswith(("http://", "https://")):
+                page_url = value
+
+        documents = [
+            control for control in controls
+            if getattr(control, "ControlTypeName", "") == "DocumentControl"
+        ]
+        if documents:
+            foreground = " ".join(_foreground_title().split()).casefold()
+            document = next(
+                (
+                    control for control in documents
+                    if str(getattr(control, "Name", "") or "").strip().casefold()
+                    and str(getattr(control, "Name", "") or "").strip().casefold() in foreground
+                ),
+                documents[0],
+            )
+            try:
+                text_controls = [document, *document.GetDescendants(maxDepth=8)]
+            except Exception:
+                text_controls = [document]
+        else:
+            # Native applications may not expose a DocumentControl. In that
+            # case the foreground root is already the app-specific boundary.
+            text_controls = controls
+
+        chunks = [
+            name
+            for control in text_controls
+            if (name := str(getattr(control, "Name", "") or "").strip())
+        ]
         return page_url, "\n".join(dict.fromkeys(chunks))[:20000]
     except Exception:
         return None, ""
@@ -347,11 +421,13 @@ def capture(surface: str = "any") -> ScreenContext:
         if text:
             observed_fields.add("text")
 
+    cdp_page_has_text: bool | None = None
     try:
         target = _pick_target(_cdp_targets())
         dom = _cdp_dom(target)
         context.page_url = _optional_text(target.get("url")) or context.page_url
         dom_text = str(dom.get("text", "") or "")
+        cdp_page_has_text = bool(dom_text.strip())
         if dom_text:
             context.text = dom_text
         context.links = [
@@ -372,7 +448,10 @@ def capture(surface: str = "any") -> ScreenContext:
     except Exception:
         pass
 
-    if not context.text:
+    # A canvas/image-only page can have empty DOM text while UIA still reports
+    # browser chrome. In that case OCR the actual foreground window instead of
+    # mistaking toolbar labels for page content.
+    if not context.text or cdp_page_has_text is False:
         ocr_url, ocr_text = _ocr_context()
         if ocr_url or ocr_text:
             context.page_url = context.page_url or ocr_url

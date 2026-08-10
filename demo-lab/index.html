@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demo Home</title><link rel="stylesheet" href="demo.css"></head>
+<body class="launcher">
+<div class="demo-ribbon">Security demo — no real data</div>
+<main class="launcher-shell">
+  <header class="launcher-head"><div><p class="eyebrow">PhishScope / Local scenario archive</p><h1>Trust signals, under glass.</h1></div><p class="launcher-intro">Six inert browser specimens for testing detection paths. Fictional identities. No collection. No submission. No telemetry.</p></header>
+  <section class="scenario-grid" aria-label="Security demo scenarios">
+    <a class="scenario-card" style="--card-accent:#65e4c5" data-code="01" href="safe-checkout.html"><span class="card-no">SPECIMEN 01 / BASELINE</span><h2>Safe checkout</h2><p>Stripe-owned frame origin present. Realistic payment shell; every input remains inert.</p></a>
+    <a class="scenario-card" style="--card-accent:#ff7663" data-code="02" href="fake-checkout.html"><span class="card-no">SPECIMEN 02 / IMPERSONATION</span><h2>Fake checkout</h2><p>Claims Stripe branding while exposing raw card fields without a Stripe frame.</p></a>
+    <a class="scenario-card" style="--card-accent:#54b8ec" data-code="03" href="email.html"><span class="card-no">SPECIMEN 03 / LINK MISMATCH</span><h2>Urgent email</h2><p>Visible destination and actual destination disagree. Navigation is prevented.</p></a>
+    <a class="scenario-card" style="--card-accent:#f3cf60" data-code="04" href="ocr.html"><span class="card-no">SPECIMEN 04 / OCR</span><h2>Canvas warning</h2><p>Support-scam language exists only as pixels, exercising the OCR fallback.</p></a>
+    <a class="scenario-card" style="--card-accent:#65f4b5" data-code="05" href="crypto.html"><span class="card-no">SPECIMEN 05 / WALLET</span><h2>Approval prompt</h2><p>A fictional setApprovalForAll request with no provider or wallet connection.</p></a>
+    <a class="scenario-card" style="--card-accent:#e8a154" data-code="06" href="download.html"><span class="card-no">SPECIMEN 06 / DOWNLOAD</span><h2>Double extension</h2><p>A realistic download page serving a harmless plain-text .pdf.exe fixture.</p></a>
+  </section>
+  <footer class="launcher-foot"><span>LOCAL STATIC LAB · OPEN ONLY ON 127.0.0.1</span><span>ALL NAMES, PRODUCTS &amp; IDENTITIES ARE FICTIONAL</span></footer>
+</main>
+</body></html>

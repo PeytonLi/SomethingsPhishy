@@ -123,6 +123,14 @@ IMPERSONATED_BRANDS = {
 STRIPE_ORIGINS = {"js.stripe.com", "checkout.stripe.com", "hooks.stripe.com",
                   "m.stripe.network", "b.stripecdn.com"}
 
+# These names commonly identify payment methods on a legitimate merchant's
+# checkout. Their mere presence does not mean the merchant is impersonating
+# that company; URL and iframe-origin checks provide the stronger evidence.
+CHECKOUT_PAYMENT_METHOD_BRANDS = {
+    "paypal", "stripe", "apple", "amazon", "coinbase", "metamask",
+    "phantom", "binance",
+}
+
 # Homoglyph folds: characters attackers substitute to build lookalike domains.
 HOMOGLYPHS = {
     "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t",
@@ -481,10 +489,16 @@ def check_body_brand_mismatch(ctx: ScreenContext) -> list[Finding]:
     if not link_domains:
         return []
 
+    payment_context = bool(re.search(
+        r"\b(card number|cvv|cvc|expiry|expiration|security code|checkout)\b",
+        text,
+        re.I,
+    ))
     mentioned = [
         (brand, real)
         for brand, real in IMPERSONATED_BRANDS.items()
         if re.search(rf"\b{re.escape(brand)}\b", text)
+        and not (payment_context and brand in CHECKOUT_PAYMENT_METHOD_BRANDS)
     ]
     if not mentioned:
         return []
@@ -558,8 +572,18 @@ def check_checkout(ctx: ScreenContext) -> list[Finding]:
             f"Card fields are hosted by “{page_dom}” itself, not by Stripe. "
             f"A real Stripe checkout loads its payment fields from stripe.com.",
             "web"))
+    elif (claims_stripe and asks_for_card and not iframe_evidence_available
+          and not stripe_hosted_page and page_dom):
+        out.append(Finding(
+            "PAYMENT_ORIGIN_UNVERIFIED", Severity.MEDIUM,
+            "I couldn't verify who hosts these payment fields",
+            f"“{page_dom}” asks for card details and claims Stripe, but this "
+            "browser did not expose the payment-frame origin.",
+            "web"))
 
-    if asks_for_card and ctx.page_url and ctx.page_url.lower().startswith("http://"):
+    is_loopback = page_host in {"localhost", "127.0.0.1", "::1"}
+    if (asks_for_card and ctx.page_url
+            and ctx.page_url.lower().startswith("http://") and not is_loopback):
         out.append(Finding(
             "INSECURE_PAYMENT_PAGE", Severity.CRITICAL,
             "This payment page is not encrypted",
@@ -569,9 +593,9 @@ def check_checkout(ctx: ScreenContext) -> list[Finding]:
     # Brand shown on the page vs. who actually owns the checkout domain.
     if asks_for_card and page_dom:
         for brand, real in IMPERSONATED_BRANDS.items():
-            # Stripe is the processor, not necessarily the merchant receiving
-            # payment, so a merchant-hosted Stripe Elements page is expected.
-            if brand == "stripe":
+            # Payment-provider/wallet names describe checkout options, not the
+            # merchant receiving payment.
+            if brand in CHECKOUT_PAYMENT_METHOD_BRANDS:
                 continue
             if re.search(rf"\b{re.escape(brand)}\b", text, re.I) and page_dom != real:
                 out.append(Finding(
@@ -828,8 +852,8 @@ def _action(verdict: Verdict, codes: set[str]) -> str:
                 "CRYPTO_GIVEAWAY", "DANGEROUS_APPROVAL"}:
         return ("Do not approve this transaction and never enter your recovery phrase. "
                 "Close this window.")
-    if codes & {"FAKE_PAYMENT_PROCESSOR", "INSECURE_PAYMENT_PAGE",
-                "CHECKOUT_BRAND_MISMATCH"}:
+    if codes & {"FAKE_PAYMENT_PROCESSOR", "PAYMENT_ORIGIN_UNVERIFIED",
+                "INSECURE_PAYMENT_PAGE", "CHECKOUT_BRAND_MISMATCH"}:
         return ("Do not enter your card details. Go to the seller's real website "
                 "yourself and pay there.")
     if verdict is Verdict.DANGER:

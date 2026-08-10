@@ -69,7 +69,11 @@ class TrackCWindowsTests(unittest.TestCase):
             page_url="https://merchant.test",
             observed_fields={"text", "page_url"},
         )
-        self.assertNotIn("FAKE_PAYMENT_PROCESSOR", self.codes(uia_only))
+        result = analyze(uia_only)
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertNotIn("FAKE_PAYMENT_PROCESSOR", codes)
+        self.assertIn("PAYMENT_ORIGIN_UNVERIFIED", codes)
+        self.assertEqual("CAUTION", result["verdict"])
 
     def test_hosted_stripe_checkout_is_not_treated_as_clone(self):
         hosted = ScreenContext(
@@ -77,6 +81,31 @@ class TrackCWindowsTests(unittest.TestCase):
             page_url="https://checkout.stripe.com/c/pay/test",
         )
         self.assertEqual("SAFE", analyze(hosted)["verdict"])
+
+    def test_legitimate_checkout_payment_methods_are_not_merchant_impersonation(self):
+        checkout = ScreenContext(
+            text="Express checkout Apple Pay PayPal Card number CVC",
+            page_url="https://www.logitechg.com/en-us/checkout",
+            iframe_origins=["https://js.stripe.com"],
+            observed_fields={"text", "page_url", "iframe_origins"},
+        )
+        self.assertEqual("SAFE", analyze(checkout)["verdict"])
+
+    def test_loopback_checkout_demo_preserves_safe_and_fake_controls(self):
+        safe = ScreenContext(
+            text="Powered by Stripe Card number CVC",
+            page_url="http://127.0.0.1:8080/safe-checkout.html",
+            iframe_origins=["https://js.stripe.com"],
+            observed_fields={"text", "page_url", "iframe_origins"},
+        )
+        fake = ScreenContext(
+            text="Powered by Stripe Card number CVV",
+            page_url="http://127.0.0.1:8080/fake-checkout.html",
+            iframe_origins=[],
+            observed_fields={"text", "page_url", "iframe_origins"},
+        )
+        self.assertEqual("SAFE", analyze(safe)["verdict"])
+        self.assertIn("FAKE_PAYMENT_PROCESSOR", self.codes(fake))
 
 
 if __name__ == "__main__":

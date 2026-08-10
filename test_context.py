@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -101,6 +102,55 @@ class ForegroundSelectionTests(unittest.TestCase):
         ):
             context._pick_target([unrelated, foreground])
 
+    def test_unique_visible_cdp_tab_is_selected_when_voice_os_is_foreground(self) -> None:
+        context = context_module()
+        logitech = page_target("Checkout", "https://www.logitechg.com/en-us/checkout")
+        elevenlabs = page_target("Subscription | ElevenLabs", "https://elevenlabs.io/app/subscription/creative")
+
+        with (
+            patch.object(context, "_foreground_title", return_value="VoiceOS"),
+            patch.object(
+                context,
+                "_cdp_visibility",
+                side_effect=lambda target: "visible" if target is logitech else "hidden",
+                create=True,
+            ),
+        ):
+            selected = context._pick_target([logitech, elevenlabs])
+
+        self.assertIs(logitech, selected)
+
+    def test_uia_browser_text_excludes_inactive_tab_names(self) -> None:
+        context = context_module()
+        url = "https://www.logitechg.com/en-us/checkout"
+        tab = SimpleNamespace(
+            Name="PhishScope — Security Scenario Lab",
+            ControlTypeName="TabItemControl",
+        )
+        address = SimpleNamespace(
+            Name="Address and search bar",
+            ControlTypeName="EditControl",
+            GetValuePattern=lambda: SimpleNamespace(Value=url),
+        )
+        cart = SimpleNamespace(Name="Shopping cart", ControlTypeName="TextControl")
+        total = SimpleNamespace(Name="Order total", ControlTypeName="TextControl")
+        document = SimpleNamespace(
+            Name="Checkout | Logitech G",
+            ControlTypeName="DocumentControl",
+            GetDescendants=lambda maxDepth=8: [cart, total],
+        )
+        root = SimpleNamespace(
+            GetDescendants=lambda maxDepth=8: [tab, address, document, cart, total],
+        )
+        auto = SimpleNamespace(GetForegroundControl=lambda: root)
+
+        with patch.dict(sys.modules, {"uiautomation": auto}):
+            page_url, text = context._uia_context()
+
+        self.assertEqual(url, page_url)
+        self.assertIn("Shopping cart", text)
+        self.assertNotIn("PhishScope", text)
+
     def test_uia_native_text_is_retained_when_cdp_target_is_unrelated(self) -> None:
         context = context_module()
         cdp_dom = Mock(return_value={"text": "Wrong browser tab"})
@@ -191,6 +241,22 @@ class FallbackAndSurfaceTests(unittest.TestCase):
 
         ocr.assert_called_once_with()
         self.assertEqual("Payment requested in rendered canvas", captured.text)
+        self.assertIn("ocr", captured.capture_source)
+
+    def test_empty_canvas_dom_uses_ocr_despite_browser_chrome_text(self) -> None:
+        context = context_module()
+        target = page_target("OCR Demo", "http://127.0.0.1:8080/ocr.html")
+        with (
+            patch.object(context, "_clipboard_text", return_value=""),
+            patch.object(context, "_foreground_title", return_value="OCR Demo - Chrome"),
+            patch.object(context, "_cdp_targets", return_value=[target]),
+            patch.object(context, "_cdp_dom", return_value={"text": "", "links": [], "iframes": []}),
+            patch.object(context, "_uia_context", return_value=(target["url"], "Address and search bar")),
+            patch.object(context, "_ocr_context", return_value=(None, "Your computer is infected. Do not shut down")),
+        ):
+            captured = context.capture("page")
+
+        self.assertIn("computer is infected", captured.text)
         self.assertIn("ocr", captured.capture_source)
 
     def test_downloads_are_excluded_from_page_capture(self) -> None:
@@ -316,6 +382,76 @@ class SurfaceFieldTests(unittest.TestCase):
 
 
 class ServerCaptureSafetyTests(unittest.TestCase):
+    def test_safe_scan_skips_explanation_and_bounds_slow_enrichment(self) -> None:
+        import server
+        from signals import ScreenContext
+
+        context = ScreenContext(
+            text="Sign in with Google",
+            page_url="https://accounts.google.com/",
+            observed_fields={"text", "page_url", "links", "iframe_origins"},
+        )
+        humanize = Mock(side_effect=AssertionError("SAFE scan must not call a model"))
+
+        def slow_enrich(_domain: str, _timeout: float) -> dict[str, Any]:
+            time.sleep(2)
+            return {}
+
+        started = time.monotonic()
+        with (
+            patch.object(server, "_capture", return_value=context),
+            patch.object(server, "_enrich", new=slow_enrich),
+            patch.object(server, "_humanize", humanize),
+        ):
+            card = server._scan("page")
+        elapsed = time.monotonic() - started
+
+        self.assertTrue(card.startswith("This page looks okay."), card)
+        self.assertNotIn("✅", card)
+        self.assertNotIn("→", card)
+        self.assertLess(elapsed, 1.0)
+        humanize.assert_not_called()
+
+    def test_voice_tool_marks_card_verbatim_without_removing_bullets(self) -> None:
+        import server
+
+        card = "This page looks okay.\n\n• **First reason**\n  Details\n\n• **Second reason**\n  Details"
+        with patch.object(server, "_scan", return_value=card):
+            response = server.check_this_page()
+
+        self.assertIn("Relay the safety card below verbatim", response)
+        self.assertIn("• **First reason**", response)
+        self.assertIn("• **Second reason**", response)
+        self.assertNotIn("→", response)
+        self.assertTrue(response.endswith("  Details"))
+
+    def test_safe_checkout_card_explains_positive_evidence(self) -> None:
+        import server
+        from signals import ScreenContext
+
+        context = ScreenContext(
+            text="Express checkout Apple Pay PayPal Card number CVC",
+            page_url="https://www.logitechg.com/en-us/checkout",
+            links=[("Terms", "https://www.logitechg.com/en-us/terms")],
+            iframe_origins=["https://js.stripe.com"],
+            observed_fields={"text", "page_url", "links", "iframe_origins"},
+        )
+        with (
+            patch.object(server, "_capture", return_value=context),
+            patch.object(server, "_enrich", return_value={}),
+        ):
+            card = server._scan("page")
+
+        self.assertTrue(card.startswith("This page looks okay."), card)
+        self.assertNotIn("✅", card)
+        self.assertNotIn("→", card)
+        self.assertIn("**Website address**", card)
+        self.assertIn("logitechg.com", card)
+        self.assertIn("**Payment form**", card)
+        self.assertIn("Stripe", card)
+        self.assertIn("**Payment choices**", card)
+        self.assertGreaterEqual(card.count("•"), 3)
+
     def test_empty_capture_returns_caution_not_safe(self) -> None:
         import server
         from signals import ScreenContext
@@ -323,7 +459,9 @@ class ServerCaptureSafetyTests(unittest.TestCase):
         with patch.object(server, "_capture", return_value=ScreenContext(observed_fields=set())):
             card = server._scan("page")
 
-        self.assertTrue(card.startswith("⚠️"), card)
+        self.assertTrue(card.startswith("Please pause."), card)
+        self.assertNotIn("⚠️", card)
+        self.assertNotIn("→", card)
         self.assertIn("couldn't inspect", card)
 
 

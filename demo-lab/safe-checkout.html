@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Checkout — Moss &amp; Finch</title><link rel="stylesheet" href="demo.css"></head>
+<body class="safe-page">
+<div class="demo-ribbon">Security demo — no real data</div><a class="demo-home" href="index.html">← Scenario lab</a>
+<nav class="safe-nav"><div class="safe-logo">Moss <i>&amp;</i> Finch</div><div class="safe-steps">Bag / Delivery / <strong>Payment</strong></div></nav>
+<main class="checkout-wrap">
+  <section class="safe-summary"><div><span class="product-tag">Order MF—2048 · Fictional merchant</span><h1>Field Notes Collection</h1></div><div><div class="order-line"><span>Canvas field bag × 1</span><span>$124.00</span></div><div class="order-line"><span>Carbon-neutral delivery</span><span>$8.00</span></div><div class="order-total"><span>Total</span><span>USD $132.00</span></div></div></section>
+  <section class="payment-panel"><h2>Payment details</h2><p>Your payment information is encrypted and secure.</p>
+    <form aria-label="Inert demo payment form"><label class="field"><span>Name on card</span><input data-inert readonly tabindex="0" autocomplete="off" placeholder="DEMO USER — DO NOT ENTER DATA"></label><label class="field"><span class="visual-card-label">Card number</span><input aria-label="Card number" data-inert readonly tabindex="0" inputmode="none" autocomplete="off" placeholder="4242 4242 4242 4242"></label><div class="field-row"><label class="field"><span class="visual-expiry-label">Expiration</span><input aria-label="Expiration" data-inert readonly inputmode="none" autocomplete="off" placeholder="12 / 30"></label><label class="field"><span class="visual-code-label">Security code</span><input aria-label="Security code" data-inert readonly inputmode="none" autocomplete="off" placeholder="123"></label></div><button class="pay-button" data-block-click type="submit">Pay $132.00 — Demo disabled</button></form>
+    <div class="provider-line"><span>🔒</span><span>Secure payment frame supplied by Stripe</span></div><p class="inert-note">Fields are read-only. This page never submits or stores data.</p>
+    <iframe class="stripe-origin-frame" src="https://js.stripe.com/v3/" sandbox title="Stripe-owned origin marker for CDP security testing"></iframe>
+  </section>
+</main><script src="demo.js"></script></body></html>
