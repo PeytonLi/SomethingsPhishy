@@ -13,12 +13,18 @@ A Windows-first, voice-accessible phishing and scam checker that inspects the ac
 - [What it does](#what-it-does)
 - [Five-minute Windows quick start](#five-minute-windows-quick-start)
 - [VoiceOS MCP setup](#voiceos-mcp-setup)
+- [Configuration](#configuration)
+- [MCP tool reference](#mcp-tool-reference)
 - [How it works](#how-it-works)
 - [Convex and the guardian dashboard](#convex-and-the-guardian-dashboard)
 - [Privacy and network egress](#privacy-and-network-egress)
 - [Demo lab](#demo-lab)
 - [Tests and evaluation](#tests-and-evaluation)
-- [Limitations and roadmap](#current-limitations-and-security-gaps)
+- [Project structure](#project-structure)
+- [Troubleshooting](#troubleshooting)
+- [Current limitations and security gaps](#current-limitations-and-security-gaps)
+- [Roadmap](#roadmap)
+- [Primary sources](#primary-sources)
 
 ## Why this exists
 
@@ -26,10 +32,10 @@ Phishing is one entry point into a much wider social-engineering problem: fake s
 
 The reported scale is large, but the measurements describe different systems and **must not be added together**:
 
-- The FBI's Internet Crime Complaint Center received **859,532 complaints of suspected internet crime in 2024**, with **$16.6 billion in reported losses**. Phishing/spoofing was the largest complaint category by volume at **193,407 complaints**.[^ic3]
+- The FBI's Internet Crime Complaint Center received **1,008,597 complaints in 2025**, with **$20.877 billion in reported losses**, up 26% from 2024. Phishing/spoofing accounted for **72,984 complaints**.[^ic3]
 - The FTC received fraud reports from **2.6 million consumers in 2024**, with **more than $12.5 billion in reported losses**, up 25% from 2023.[^ftc]
-- People age 60 and older submitted **147,127 IC3 complaints** and reported **$4.885 billion in losses** in 2024—the highest totals of any IC3 age group.[^ic3]
-- APWG observed **1,003,924 phishing attacks in Q1 2025**. This is infrastructure and campaign telemetry, not a victim count.[^apwg]
+- People age 60 and older submitted **201,266 IC3 complaints** and reported **$7.748 billion in losses** in 2025—the highest totals of any IC3 age group.[^ic3]
+- APWG observed **971,181 phishing attacks in Q1 2026**, up 13.8% from Q4 2025. This is infrastructure and campaign telemetry, not a victim count.[^apwg]
 - Microsoft's ClickFix research describes fake CAPTCHA or error prompts that persuade users to paste and execute attacker-supplied commands, affecting thousands of observed devices per day in its telemetry.[^clickfix]
 
 Reported complaints and losses understate total harm, while vendor telemetry covers only what a provider can observe. See the repository's [full phishing and scam landscape research brief](docs/research/phishing-and-scam-landscape.md) for definitions, age-group findings, citation cautions, and additional primary sources.
@@ -60,7 +66,7 @@ This repository is a functional Windows/hackathon prototype with local MCP trans
 | Optional domain-age enrichment | Uses a cached Convex RDAP registration timestamp when one is already available | Partially wired |
 | Community reputation | Records distinct DANGER reporters and promotes at three reporters | Stored, but does not affect verdicts |
 | Similar-scam vector search | Convex action returns up to five 1,536-dimensional matches capped at supporting severity | Available, but not called by scans |
-| Guardian dashboard | React/Vite UI with active alerts, history, screenshots, acknowledgement, circle management, guardian/protected views, and seeded offline mode | Prototype |
+| Guardian dashboard | React/Vite UI with active alerts, history, screenshots, acknowledgement, circle management, UI perspective toggles, and seeded fallback mode | Prototype |
 | Guardian escalation | Explicit tool queues a scan and screenshot to Convex and attempts an A1 Mobile call | Optional prototype integration |
 | Evaluation harness | Runs scrubbed local snapshots without opening extracted phishing URLs | Implemented |
 | Local demo lab | Inert scenarios for checkout, email, OCR, crypto, and download checks | Implemented |
@@ -88,6 +94,7 @@ This path starts only the local fixture server, local MCP server, and a dedicate
 - Python 3 through the Windows `py` launcher. The project is currently tested with Python 3.13.
 - Google Chrome installed in a standard `Program Files` location.
 - PowerShell.
+- VoiceOS or another MCP client if you want to exercise the voice-facing tools.
 - A current Node.js release and npm only if you want Convex or the guardian dashboard.
 
 ### 1. Install Python dependencies
@@ -133,6 +140,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-chrome.ps1
 ```
 
 In that Chrome window, open <http://127.0.0.1:8080/> and keep the scenario tab in the foreground before checking it.
+
+> [!WARNING]
+> The dedicated Chrome profile exposes a debugging endpoint to other processes running as the same Windows user. Use it only for testing. Do not sign into personal, work, banking, healthcare, password-manager, or wallet accounts in this profile.
 
 Optional readiness checks:
 
@@ -206,6 +216,28 @@ If it has one launch-command field:
 
 VoiceOS's own [MCP integration guide](https://voiceos.com/guide/build-mcp-integration) is the primary reference for the current UI and registration flow.
 
+### Optional current-user autostart
+
+Review both scripts before enabling autostart:
+
+```powershell
+Get-Content .\scripts\install-autostart.ps1
+Get-Content .\scripts\run-server.ps1
+```
+
+Then install the scheduled task:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
+Start-ScheduledTask -TaskName "SomethingsPhishy MCP"
+```
+
+The task runs hidden at user logon with a limited interactive token so clipboard and foreground capture work. It uses `ExecutionPolicy Bypass`, invokes global `py -3`, force-stops the current listener on port `8765`, and leaves the unauthenticated loopback MCP endpoint running continuously. Logs go to `%LOCALAPPDATA%\SomethingsPhishy\server.log`. Remove it with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1 -Remove
+```
+
 ## Configuration
 
 No API key is required for local capture and deterministic analysis. Create `.env.local` in the repository root only for the optional services you use. Both `.env.local` and `dashboard/.env.local` are ignored by Git.
@@ -235,7 +267,7 @@ All tools return text for VoiceOS to relay. Scan cards begin with a plain-langua
 | Tool | Arguments | Use it for | Important behavior |
 | --- | --- | --- | --- |
 | `check_this_page` | None | “Is this safe/real?”, webpages, webmail, login forms, checkout pages, pop-ups, and uncertain cases | Captures the active context and runs the general scan. |
-| `check_this_download` | None | A recent installer, archive, attachment, executable, or download button | Includes up to five files modified in the last 15 minutes plus Mark of the Web metadata when available; it does not scan file bytes. |
+| `check_this_download` | None | A recent installer, archive, attachment, executable, or download button | Collects up to five files modified in the last 15 minutes, but analyzes the newest one; includes Mark of the Web metadata when available and never scans file bytes. |
 | `check_this_transaction` | None | Crypto payments, copied wallet addresses, wallet approvals, seed-phrase prompts, or address poisoning | Extracts a displayed payment address and an exact clipboard address when possible. It never submits or signs a transaction. |
 | `check_my_clipboard` | None | ClickFix-style “press Win+R and paste” instructions or concern about copied commands | Detects command patterns locally. Raw clipboard text is withheld from Convex evidence and model explanation paths. |
 | `why_is_that_bad` | `finding_code: string` | A follow-up about one finding from the latest scan | Does not create a new verdict. The current MCP adapter usually falls back to deterministic text; see [limitations](#current-limitations-and-security-gaps). |
@@ -256,21 +288,23 @@ flowchart TD
     Capture --> OCR[Local Windows OCR]
     Capture --> Clipboard[Local clipboard]
     Capture --> Downloads[Recent download and Zone.Identifier metadata]
+    Capture --> Server
 
-    Server -->|Optional domain query| Convex[Convex backend]
-    Capture --> Signals[signals.py deterministic checks]
-    Convex -->|Cached registration timestamp only| Signals
+    Server -->|Optional bounded domain query| Convex[Convex backend]
+    Convex -->|Cached registration timestamp| Server
+    Server --> Signals[signals.py deterministic checks]
     Signals --> Verdict[Deterministic aggregation]
-    Verdict --> Card[Plain-language verdict card]
+    Verdict --> Server
+    Server --> Card[Plain-language verdict card]
     Card --> VoiceOS
 
-    Verdict -->|CAUTION or DANGER metadata, async| Convex
+    Server -->|CAUTION or DANGER metadata, async| Convex
     Convex --> Dashboard[React guardian dashboard]
 
-    VoiceOS -->|Explicit why follow-up| Explain[explain.py constrained explanation]
-    Explain -->|Current adapter can fall back locally| VoiceOS
+    Server -->|Explicit why follow-up| Explain[explain.py constrained explanation]
+    Explain --> Server
 
-    VoiceOS -->|Explicit guardian request| Guardian[Fresh scan and screenshot]
+    Server -->|Explicit guardian request| Guardian[Fresh scan and screenshot]
     Guardian --> Convex
     Guardian --> A1[A1 Mobile call API]
 ```
@@ -373,7 +407,7 @@ The Python scan path remains functional without Convex. When `CONVEX_URL` is con
 - community DANGER reports;
 - asynchronous persistence of non-`SAFE` routine scans;
 - guardian links, a reactive alert feed, acknowledgement state, and optional screenshots;
-- a consent-gated corpus ingestion/vector-search API that is not part of verdict aggregation;
+- consent-gated corpus ingestion and a separately public vector-search API, neither of which is part of verdict aggregation;
 - scheduled DANGER context lookup after 60 seconds and maintenance crons.
 
 The scheduled alert action currently returns eligible guardian context but has no email/SMS/push delivery provider. The reactive dashboard is the implemented notification surface; the A1 call is a separate explicit local action.
@@ -390,7 +424,7 @@ The scheduled alert action currently returns eligible guardian context but has n
 
 ### Run the dashboard in seeded offline mode
 
-Offline mode is useful for UI review and requires no Convex deployment. Its rows are illustrative fixtures, **not live detector output or evaluation evidence**.
+Seeded fallback mode is useful for UI review and requires no Convex deployment. Its rows are illustrative fixtures, **not live detector output or evaluation evidence**. The current seed data references a remote `placehold.co` screenshot, so this mode can still make that image request and is not fully offline.
 
 ```powershell
 # Run from the repository root
@@ -401,6 +435,9 @@ npm run dashboard
 Open the URL Vite prints, normally <http://localhost:5173>. With no `VITE_CONVEX_URL`, the header shows `Seeded offline mode`.
 
 ### Run the dashboard with Convex
+
+> [!WARNING]
+> The current Convex backend has no authentication or ownership enforcement. Use only a development deployment with synthetic, non-sensitive data. Do not expose real user scans, screenshots, contact information, or browsing evidence until authorization is implemented.
 
 1. Install root and dashboard packages:
 
@@ -441,7 +478,7 @@ Open the URL Vite prints, normally <http://localhost:5173>. With no `VITE_CONVEX
 6. In the dashboard's **Circle** view, add the protected ID `margaret-demo` to the default guardian `dan-demo`. This prototype records a consent checkbox/boolean but does not authenticate either person.
 7. Run a `CAUTION` or `DANGER` MCP check. Routine `SAFE` checks are intentionally not recorded. Use **Acknowledge** to clear an active alert.
 
-The dashboard supports `?view=guardian|protected` and `?section=active|history|circle`; the UI switchers update those parameters automatically.
+The dashboard supports `?view=guardian|protected` and `?section=active|history|circle`; the UI switchers update those parameters automatically. The `protected` value changes presentation only—both perspectives currently query the guardian feed with the configured guardian ID and are not separate authorization modes.
 
 ![Guardian dashboard](dashboard.png)
 
@@ -481,6 +518,7 @@ The project is local-first, but it is not “no network.” Egress depends on co
 | Explicit guardian call | A1 Mobile base URL | Guardian phone number; team key is sent as an HTTP header |
 | Intended model explanation | DeepSeek or Anthropic | Structured finding code/severity/title/evidence only; no `ScreenContext`. `CLIPBOARD_PAYLOAD` is kept local. The current MCP adapter normally falls back before this call. |
 | Manual `intel.refreshDomainIntel` action | `rdap.org` | Registrable domain |
+| Seeded dashboard fallback | `placehold.co` | A remote placeholder screenshot referenced by seed data |
 | Demo safe checkout | `js.stripe.com` | A sandboxed, non-interactive iframe request; no entered field values |
 | `scripts/start-demo.ps1` | Several external websites | Normal browser requests to every external tab listed in the script |
 
@@ -519,19 +557,17 @@ npm --prefix dashboard run build
 
 ### Current verified results
 
-These results were produced against the current working tree on August 9, 2026. The Python suite is not currently green:
+These results were produced against the current working tree on August 9, 2026:
 
 | Validation | Result |
 | --- | --- |
-| Python unit tests | **33 passed, 3 failed** out of 36 in 2.687 s. All three current failures are stale assertions that cards must not contain `→`; `server.py` now intentionally renders one action line. |
+| Python unit tests | **37 passed** in 1.726 s |
 | Convex privacy tests | **2 passed** |
 | Root TypeScript check | `tsc --noEmit` passed |
 | Dashboard production build | `tsc -b && vite build` passed |
 | Evaluation controls | **0/8 false positives** (`0.0%`) |
 | Evaluation attack snapshots | **48/60 detected**, **12/60 missed** (`80.0%` detection/recall) |
 | Harness-reported precision | **100.0%** on this 68-item fixture set |
-
-The three Python failures are in `ServerCaptureSafetyTests` and concern output formatting, not verdict changes: the tests still call `assertNotIn("→", card)` after the renderer began appending `result["action"]`. The failure is reported here rather than hidden or fixed as part of this README-only task.
 
 The evaluation harness uses scrubbed `ScreenContext` snapshots, not live websites. The 60 attack fixtures come from a public Nazario phishing mbox; extracted paths and queries are removed, victim data is scrubbed, and the raw mbox is not committed. “Detected” means the result was not `SAFE`, so both `CAUTION` and `DANGER` count. Eight controls are far too few to estimate production false-positive rates, and 60 older email samples do not represent current multichannel scams, OCR errors, native apps, downloads, or adversarial evasion. Treat these numbers as a reproducible regression baseline, not a safety claim.
 
@@ -617,7 +653,7 @@ Without CDP iframe evidence, the engine deliberately emits `PAYMENT_ORIGIN_UNVER
 ### A recent download is not found
 
 - The capture reads the current user's `Downloads` directory only.
-- It considers files modified within the last 15 minutes and keeps the newest five.
+- It collects up to five files modified within the last 15 minutes, then analyzes the newest one.
 - Mark of the Web may be absent on files copied locally, produced by some apps, or stored on filesystems that do not preserve NTFS alternate data streams. Absence is unknown, not proof of safety.
 - A normal page scan intentionally excludes Downloads state; use `check_this_download`.
 
@@ -660,7 +696,7 @@ These are current source-code limitations, not future hypotheticals:
 4. **No file-byte antivirus scan.** Download checks inspect names, visible text, age, size, source/referrer metadata, and Mark of the Web. They do not hash or parse the file, call Defender, inspect archive contents, verify signatures, or execute a sandbox.
 5. **No live Outlook COM integration.** `pywin32` is listed for a potential Outlook path, but current capture uses generic UIA/CDP fields and does not read Outlook headers through COM. Sender/reply checks are strongest in compatible webmail DOMs and may have no data elsewhere.
 6. **Community and vector data do not affect verdicts.** The Python client fetches a community row, but `server.py` passes only cached registration time into `analyze()`. `corpus.similarScams` is not called. This is safer than allowing fuzzy data to create DANGER, but the UI does not make the unused enrichment obvious.
-7. **Domain refresh is not automatic in the local scan.** The MCP path queries cached `intel.getDomainIntel`; it does not call `intel.refreshDomainIntel`. Domain-age findings appear only after another caller has populated a non-stale row.
+7. **Domain refresh is not automatic in the local scan.** The MCP path queries cached `intel.getDomainIntel`; it does not call `intel.refreshDomainIntel`. Domain-age findings appear only after another caller has populated a row, and the current Python adapter does not honor the returned `stale` flag before using its registration timestamp.
 8. **Model follow-up is not fully wired.** The initial scan correctly avoids model calls. However, MCP `why_is_that_bad` passes a single finding to `explain.humanize`, whose contract expects a full result object, so it normally returns the deterministic fallback. The rendered card also omits finding codes, making it difficult for VoiceOS to supply the required `finding_code` argument from visible output alone.
 9. **Scheduled alert delivery is incomplete.** A DANGER scan schedules a 60-second lookup and acknowledgement can suppress it, but the action only returns guardian context. It does not send email, SMS, or push notifications. The direct A1 call happens only through explicit `alert_my_guardian`.
 10. **A1/voice wiring is external and US-only.** Phone normalization accepts only US ten-digit numbers. The static Convex `/voice` response is not explicitly included in `a1mobile.py`'s call payload, and response text contains hard-coded prototype names.
@@ -687,16 +723,16 @@ A practical order for moving beyond the prototype:
 
 ## Primary sources
 
-- [FBI IC3 2024 Annual Report](https://www.ic3.gov/AnnualReport/Reports/2024_IC3Report.pdf) and [FBI release](https://www.fbi.gov/news/press-releases/fbi-releases-annual-internet-crime-report)
+- [FBI IC3 2025 Annual Report](https://www.ic3.gov/AnnualReport/Reports/2025_IC3Report.pdf)
 - [FTC: reported fraud losses reached $12.5 billion in 2024](https://www.ftc.gov/news-events/news/press-releases/2025/03/new-ftc-data-show-big-jump-reported-losses-fraud-125-billion-2024)
-- [APWG Phishing Activity Trends Report, Q1 2025](https://docs.apwg.org/reports/apwg_trends_report_q1_2025.pdf)
+- [APWG Phishing Activity Trends Report, Q1 2026](https://docs.apwg.org/reports/apwg_trends_report_q1_2026.pdf)
 - [FTC report on protecting older adults](https://www.ftc.gov/news-events/news/press-releases/2024/10/ftc-issues-annual-report-congress-agencys-actions-protect-older-adults)
 - [CISA: Avoiding Social Engineering and Phishing Attacks](https://www.cisa.gov/news-events/news/avoiding-social-engineering-and-phishing-attacks) (archived)
 - [Google Threat Intelligence: The Cost of a Call](https://cloud.google.com/blog/topics/threat-intelligence/voice-phishing-data-extortion)
 - [Microsoft Threat Intelligence: Think before you Click(Fix)](https://www.microsoft.com/en-us/security/blog/2025/08/21/think-before-you-clickfix-analyzing-the-clickfix-social-engineering-technique/)
 - [Full repository research brief](docs/research/phishing-and-scam-landscape.md)
 
-[^ic3]: Federal Bureau of Investigation, Internet Crime Complaint Center, *2024 IC3 Annual Report*, released April 23, 2025. See pp. 4–10, 27–31, and 35–38.
+[^ic3]: Federal Bureau of Investigation, Internet Crime Complaint Center, *2025 IC3 Annual Report*. See the 2025 complaint highlights, crime-type table, and elder-fraud sections.
 [^ftc]: Federal Trade Commission, “New FTC Data Show a Big Jump in Reported Losses to Fraud to $12.5 Billion in 2024,” March 10, 2025.
-[^apwg]: Anti-Phishing Working Group, *Phishing Activity Trends Report, 1st Quarter 2025*, reporting period January 1–March 31, 2025.
+[^apwg]: Anti-Phishing Working Group, *Phishing Activity Trends Report, 1st Quarter 2026*, reporting period January 1–March 31, 2026.
 [^clickfix]: Microsoft Threat Intelligence and Microsoft Defender Experts, “Think before you Click(Fix): Analyzing the ClickFix social engineering technique,” August 21, 2025.
