@@ -266,9 +266,9 @@ def render_verdict_card(result: dict[str, Any]) -> str:
         "window": "window",   # a native app, e.g. Notepad — there is no page
     }.get(str(result.get("surface", "")), "page")
     verdict_lines = {
-        "SAFE": f"This {subject} looks okay.",
-        "CAUTION": f"Please pause. I could not fully confirm this {subject} is safe.",
-        "DANGER": "This looks dangerous. Do not continue.",
+        "SAFE": f"**SAFE — This {subject} looks okay**",
+        "CAUTION": f"**CAUTION — Pause before using this {subject}**",
+        "DANGER": "**DANGER — Do not continue**",
     }
     blocks = [verdict_lines.get(result["verdict"], verdict_lines["CAUTION"])]
 

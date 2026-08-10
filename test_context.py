@@ -406,7 +406,7 @@ class ServerCaptureSafetyTests(unittest.TestCase):
             card = server._scan("page")
         elapsed = time.monotonic() - started
 
-        self.assertTrue(card.startswith("This page looks okay."), card)
+        self.assertTrue(card.startswith("**SAFE — This page looks okay**"), card)
         self.assertNotIn("✅", card)
         self.assertNotIn("→", card)
         self.assertLess(elapsed, 1.0)
@@ -415,7 +415,7 @@ class ServerCaptureSafetyTests(unittest.TestCase):
     def test_voice_tool_marks_card_verbatim_without_removing_bullets(self) -> None:
         import server
 
-        card = "This page looks okay.\n\n• **First reason**\n  Details\n\n• **Second reason**\n  Details"
+        card = "**SAFE — This page looks okay**\n\n• **First reason**\n  Details\n\n• **Second reason**\n  Details"
         with patch.object(server, "_scan", return_value=card):
             response = server.check_this_page()
 
@@ -442,7 +442,7 @@ class ServerCaptureSafetyTests(unittest.TestCase):
         ):
             card = server._scan("page")
 
-        self.assertTrue(card.startswith("This page looks okay."), card)
+        self.assertTrue(card.startswith("**SAFE — This page looks okay**"), card)
         self.assertNotIn("✅", card)
         self.assertNotIn("→", card)
         self.assertIn("**Website address**", card)
@@ -459,10 +459,27 @@ class ServerCaptureSafetyTests(unittest.TestCase):
         with patch.object(server, "_capture", return_value=ScreenContext(observed_fields=set())):
             card = server._scan("page")
 
-        self.assertTrue(card.startswith("Please pause."), card)
+        self.assertTrue(card.startswith("**CAUTION — Pause before using this page**"), card)
         self.assertNotIn("⚠️", card)
         self.assertNotIn("→", card)
         self.assertIn("couldn't inspect", card)
+
+    def test_danger_card_starts_with_an_explicit_status(self) -> None:
+        import server
+
+        card = server.render_verdict_card({
+            "verdict": "DANGER",
+            "findings": [{
+                "title": "The address imitates a trusted site",
+                "evidence": "The displayed address does not match the real domain.",
+            }],
+            "action": "Close this page.",
+        })
+
+        self.assertTrue(card.startswith("**DANGER — Do not continue**"), card)
+        self.assertNotIn("✅", card)
+        self.assertNotIn("→", card)
+        self.assertIn("**What to do**", card)
 
 
 class ExplanationProviderTests(unittest.TestCase):
