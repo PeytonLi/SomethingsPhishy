@@ -192,8 +192,11 @@ def _safe_observations(context: ScreenContext, surface: str) -> list[str]:
     if len(observations) < 3 and context.links and (
         context.observed_fields is None or "links" in context.observed_fields
     ):
+        count = len(context.links)
+        how_many = "the one link" if count == 1 else f"all {count} links"
         observations.append(
-            f"Links: I checked {len(context.links)} visible link(s). None claimed one website but opened another."
+            f"Links: I checked {how_many} on this page. "
+            f"None of them said one website and opened another."
         )
 
     if len(observations) < 3 and surface in {"transaction", "crypto"}:
@@ -202,23 +205,69 @@ def _safe_observations(context: ScreenContext, surface: str) -> list[str]:
                 "Wallet address: The address on screen matches the address on the clipboard."
             )
 
-    if len(observations) < 3:
+    # Downloads. capture() populates these for the "download" and "any"
+    # surfaces, but nothing here used to read them — so asking about a file in
+    # Downloads fell straight through to the filler below and read as generic.
+    filename = getattr(context, "download_filename", None)
+    if filename:
+        size = None
+        for record in getattr(context, "recent_downloads", []) or []:
+            if record.get("filename") == filename:
+                size = record.get("size_bytes")
+                break
+        size_note = f" It is {size / 1_048_576:.1f} MB." if isinstance(size, int) and size else ""
+        observations.append(f"File I checked: “{filename}”.{size_note}")
+
+        source = getattr(context, "download_host_url", None)
+        referrer = getattr(context, "download_referrer_url", None)
+        source_host = _url_host(source or "")
+        referrer_host = _url_host(referrer or "")
+        if source_host and referrer_host and registrable(source_host) != registrable(referrer_host):
+            observations.append(
+                f"Where it came from: The page was “{referrer_host}” but the file "
+                f"itself downloaded from “{source_host}”."
+            )
+        elif source_host:
+            observations.append(f"Where it came from: It downloaded from “{source_host}”.")
+        elif getattr(context, "zone_id", None) is None:
+            observations.append(
+                "Where it came from: Windows kept no record of where this file was "
+                "downloaded from, so I could not confirm its source."
+            )
+
+    # Native windows (Notepad, Mail, a wallet app). Without a page_url every
+    # branch above skips, which made non-browser checks look broken even when
+    # the text was captured fine.
+    if not page_host and (context.text or "").strip():
         observations.append(
-            "Active page only: I checked this page and ignored the names of other browser tabs."
+            f"What I read: I read {len(context.text.split())} words from the "
+            f"window open in front of you, not a web page."
         )
-    if len(observations) < 3:
+
+    if not observations:
         observations.append(
-            "What I found: No clear scam warning matched the page I checked."
+            "What I checked: I read what is on screen right now and found nothing "
+            "matching a known scam pattern."
         )
+    # Deliberately no padding to three. Filler bullets are what made every
+    # answer read the same; two real observations beat three with one invented.
     return observations[:3]
 
 
 def render_verdict_card(result: dict[str, Any]) -> str:
     """Turn an analysis result into the complete readable and speakable card."""
     result = _normalise_result(result)
+    # "This page looks okay" is wrong when the thing checked was a file in
+    # Downloads or a Notepad window. Name what was actually examined.
+    subject = {
+        "download": "file",
+        "transaction": "transaction",
+        "crypto": "transaction",
+        "window": "window",   # a native app, e.g. Notepad — there is no page
+    }.get(str(result.get("surface", "")), "page")
     verdict_lines = {
-        "SAFE": "This page looks okay.",
-        "CAUTION": "Please pause. I could not fully confirm this page is safe.",
+        "SAFE": f"This {subject} looks okay.",
+        "CAUTION": f"Please pause. I could not fully confirm this {subject} is safe.",
         "DANGER": "This looks dangerous. Do not continue.",
     }
     blocks = [verdict_lines.get(result["verdict"], verdict_lines["CAUTION"])]
@@ -240,6 +289,14 @@ def render_verdict_card(result: dict[str, Any]) -> str:
             evidence = str(finding.get("evidence", "")).strip()
             if evidence:
                 blocks.append(f"• **{title}**\n  {evidence}")
+
+    # PRD §6.9: exactly one action, always. This had been dropped, so DANGER
+    # cards ended on evidence and never said what to do about it. Rendered as a
+    # labelled block rather than "→ ..." because the card is read aloud, and an
+    # arrow glyph is noise in speech.
+    action = str(result.get("action", "")).strip()
+    if action and result["verdict"] != "SAFE":
+        blocks.append(f"• **What to do**\n  {action}")
 
     return "\n\n".join(blocks)
 
@@ -312,6 +369,13 @@ def _scan(surface: str) -> str:
         result = _normalise_result(None)
     if enrichment:
         result["enrichment"] = enrichment
+    # The card names what was examined ("this file" vs "this page"), so the
+    # surface has to survive as far as the renderer. A page check that found no
+    # URL was really a native window (Notepad, Mail), not a page.
+    if surface == "page" and not context.page_url and (context.text or "").strip():
+        result["surface"] = "window"
+    else:
+        result["surface"] = surface
     if result.get("verdict") == "SAFE":
         result["observations"] = _safe_observations(context, surface)
 

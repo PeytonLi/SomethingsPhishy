@@ -711,8 +711,57 @@ def check_windows(ctx: ScreenContext) -> list[Finding]:
     clickfix = False
     name = ctx.download_filename or ""
     ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
-    def add(code, sev, title, observed):
-        out.append(Finding(code, sev, title, f"Observed {_q(observed)}.", "download"))
+    # Every download finding used to render as `Observed "X".` — one template
+    # for fifteen different checks, which made every card read the same and
+    # explained nothing. Each code now says what the observed string means.
+    # The quoted evidence is still the literal thing seen, per the design
+    # contract; only the sentence around it is specific.
+    _PHRASING = {
+        "CLICKFIX_COMMAND":
+            'The page says {q}. No real website or IT support ever asks you to '
+            'paste a command into the Run box.',
+        "CLIPBOARD_PAYLOAD":
+            'Something copied this to your clipboard without you doing it: {q}. '
+            'Pasting it would run a hidden command on your PC.',
+        "DOUBLE_EXTENSION":
+            'The file is named {q}. It looks like a document, but the real '
+            'ending makes it a program that runs when opened.',
+        "DOWNLOAD_TYPE_MISMATCH":
+            'The button promised a document, but the file is {q} — a program.',
+        "FAKE_BROWSER_UPDATE":
+            'The page offers {q}. Browsers update themselves; a website offering '
+            'to update yours is always fake.',
+        "DISABLE_ANTIVIRUS":
+            'The page asks you to {q}. Nothing legitimate needs your antivirus '
+            'turned off to install.',
+        "TECH_SUPPORT_SCARE":
+            'The page claims {q}. Real virus warnings never come from a web page '
+            'and never give you a number to call.',
+        "MOTW_STRIPPED":
+            'Windows kept no download record for {q}, which means it came out of '
+            'an archive that stripped the safety marker.',
+        "LNK_IN_ARCHIVE":
+            'The archive contains {q}. A shortcut inside a download is a common '
+            'way to start a program you did not choose.',
+        "SOFTWARE_IMPERSONATION":
+            'The page offers {q}, but neither the page nor the file is on that '
+            "maker's real website.",
+        "PASSWORD_PROTECTED_ARCHIVE":
+            'The download is a password-protected archive and the page prints the '
+            'password: {q}. That combination exists to get past antivirus.',
+        "WAREZ_CRACK":
+            'The page advertises {q}. Cracked software is one of the most common '
+            'ways people install malware themselves.',
+        "MOTW_EVASION_CONTAINER":
+            'The file is {q} — a disk image. Real documents are never delivered '
+            'this way; it is used to bypass the download warning.',
+        "DANGEROUS_EXT":
+            'The file {q} can run code when opened.',
+    }
+
+    def add(code, sev, title, observed, raw=False):
+        evidence = observed if raw else _PHRASING.get(code, "Observed {q}.").format(q=_q(observed))
+        out.append(Finding(code, sev, title, evidence, "download"))
     try:
         launch = re.search(r"\bwin(?:dows)?(?: key)?\s*\+\s*[rx]\b|⊞\s*\+\s*[rx]|open (?:windows )?powershell|open (?:the )?command prompt", text, re.I)
         follow = re.search(r"\bpaste\b|(?:press|hit) enter|verify (?:that )?you(?: are|'re) human", text, re.I)
@@ -755,7 +804,7 @@ def check_windows(ctx: ScreenContext) -> list[Finding]:
     try:
         h, r = registrable(_host(ctx.download_host_url or "")), registrable(_host(ctx.download_referrer_url or ""))
         trusted = TRUSTED_DOWNLOAD_HOSTS | {d for _,_,ds in OFFICIAL_SOFTWARE for d in ds}
-        if h and r and h != r and h not in trusted: add("DOWNLOAD_HOST_MISMATCH", Severity.HIGH if ext in DANGEROUS_EXT else Severity.MEDIUM, "The file came from a different host", (ctx.download_host_url or "")+" vs "+(ctx.download_referrer_url or ""))
+        if h and r and h != r and h not in trusted: add("DOWNLOAD_HOST_MISMATCH", Severity.HIGH if ext in DANGEROUS_EXT else Severity.MEDIUM, "The file came from a different website than the page", f"The page you were on was “{r}”, but the file itself downloaded from “{h}”.", raw=True)
     except Exception: pass
     try:
         m = re.search(r"Zone\.Identifier\s*:\s*(?:absent|missing)", text, re.I)
@@ -781,6 +830,11 @@ def check_windows(ctx: ScreenContext) -> list[Finding]:
         if ext in DANGEROUS_EXT and (clickfix or suspicious_source or re.search(r"Zone\.Identifier\s*:\s*(?:absent|missing)", text, re.I)):
             add("DANGEROUS_EXT",Severity.LOW,"The file can run code",name)
     except Exception: pass
+    # DANGEROUS_EXT quotes the same filename as the stronger checks, so showing
+    # both spends a bullet repeating one fact. Only three bullets ever display.
+    if len(out) > 1 and any(f.code in {"DOUBLE_EXTENSION", "DOWNLOAD_TYPE_MISMATCH",
+                                       "MOTW_EVASION_CONTAINER"} for f in out):
+        out = [f for f in out if f.code != "DANGEROUS_EXT"]
     return out
 
 
@@ -856,6 +910,15 @@ def _action(verdict: Verdict, codes: set[str]) -> str:
                 "INSECURE_PAYMENT_PAGE", "CHECKOUT_BRAND_MISMATCH"}:
         return ("Do not enter your card details. Go to the seller's real website "
                 "yourself and pay there.")
+    if codes & {"DOUBLE_EXTENSION", "DOWNLOAD_TYPE_MISMATCH", "SOFTWARE_IMPERSONATION",
+                "DOWNLOAD_HOST_MISMATCH", "MOTW_STRIPPED", "MOTW_EVASION_CONTAINER",
+                "PASSWORD_PROTECTED_ARCHIVE", "WAREZ_CRACK", "FAKE_BROWSER_UPDATE",
+                "LNK_IN_ARCHIVE"}:
+        return ("Do not open this file. Delete it from your Downloads folder, and if "
+                "you still want the program, get it from the maker's official site.")
+    if codes & {"TECH_SUPPORT_SCARE", "DISABLE_ANTIVIRUS"}:
+        return ("Do not call the number and do not turn off your antivirus. Close this "
+                "window and, if you're worried, ask someone you trust to look with you.")
     if verdict is Verdict.DANGER:
         return ("Don't click anything here. Contact the company using the number on "
                 "your card or their official app.")

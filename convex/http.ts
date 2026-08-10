@@ -5,11 +5,11 @@ const voiceResponse = httpAction(async () => {
   const xml = [
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
     "<Response>",
-    "<Say voice=\"Polly.Joanna-Neural\" voiceSpeed=\"0.82\">Hi Peyton! It’s Something’s Phishy.</Say>",
+    "<Say voice=\"Polly.Matthew-Neural\" voiceSpeed=\"1.05\">Hi Peyton! It’s Something’s Phishy.</Say>",
     "<Pause length=\"1\"/>",
-    "<Say voice=\"Polly.Joanna-Neural\" voiceSpeed=\"0.82\">Logan would love a little help checking something that might be a scam.</Say>",
+    "<Say voice=\"Polly.Matthew-Neural\" voiceSpeed=\"1.05\">Logan would love a little help checking something that might be a scam.</Say>",
     "<Pause length=\"1\"/>",
-    "<Say voice=\"Polly.Joanna-Neural\" voiceSpeed=\"0.82\">When you’re ready, please open the guardian dashboard, or give Logan a call. Thanks for looking out for them!</Say>",
+    "<Say voice=\"Polly.Matthew-Neural\" voiceSpeed=\"1.05\">When you’re ready, please open the guardian dashboard, or give Logan a call. Thanks for looking out for them!</Say>",
     "</Response>",
   ].join("");
 
